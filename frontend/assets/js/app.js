@@ -1,7 +1,13 @@
+const runtimeHost = window.location.hostname;
+const isFileProtocol = window.location.protocol === "file:";
+const isLoopbackHost = ["127.0.0.1", "localhost"].includes(runtimeHost);
+const localBase = "http://localhost:5000/api";
+const remoteBase = "https://h2opsbackend.onrender.com/api";
 const API = {
-  base: "https://h2opsbackend.onrender.com/api",
+  base: (isFileProtocol || isLoopbackHost ? localBase : remoteBase),
   endpoints: {
     login: "/auth/login",
+    register: "/auth/register",
     stats: "/dashboard/stats",
     logs: "/logs",
     incidents: "/incidents",
@@ -10,6 +16,8 @@ const API = {
     sop: "/sop"
   }
 };
+
+console.info(`[H2Ops] Using API base: ${API.base}`);
 
 const state = {
   accessToken: localStorage.getItem("token") || "",
@@ -93,6 +101,48 @@ function clearSession(){
   localStorage.removeItem("user");
 }
 
+function clearAuthMessages(){
+  const loginMsg = qs("#loginMsg");
+  const registerMsg = qs("#registerMsg");
+  if(loginMsg) loginMsg.textContent = "";
+  if(registerMsg) registerMsg.textContent = "";
+}
+
+function toggleAuthView(view){
+  const loginForm = qs("#loginForm");
+  const registerForm = qs("#registerForm");
+  if(view === "register"){
+    if(loginForm) loginForm.style.display = "none";
+    if(registerForm) registerForm.style.display = "block";
+  } else if(view === "hidden"){
+    if(loginForm) loginForm.style.display = "none";
+    if(registerForm) registerForm.style.display = "none";
+  } else {
+    if(loginForm) loginForm.style.display = "block";
+    if(registerForm) registerForm.style.display = "none";
+  }
+}
+
+function showAppShell(){
+  toggleAuthView("hidden");
+  const authSection = qs("#auth");
+  if(authSection) authSection.style.display = "none";
+  const headerEl = qs("header");
+  if(headerEl) headerEl.style.display = "flex";
+  const mainEl = qs("main");
+  if(mainEl) mainEl.style.display = "block";
+}
+
+function showLoginShell(view = "login"){
+  toggleAuthView(view);
+  const authSection = qs("#auth");
+  if(authSection) authSection.style.display = "grid";
+  const headerEl = qs("header");
+  if(headerEl) headerEl.style.display = "none";
+  const mainEl = qs("main");
+  if(mainEl) mainEl.style.display = "none";
+}
+
 async function handleLogin(e){
   e.preventDefault();
   const formData = asFormData(e.target);
@@ -118,10 +168,10 @@ async function handleLogin(e){
     };
     saveSession(normalized);
     await hydrateApp();
-    qs("#auth").style.display = "none";
-    qs("header").style.display = "flex";
-    qs("main").style.display = "block";
+    showAppShell();
+    clearAuthMessages();
     qs("#loginForm")?.reset();
+    qs("#registerForm")?.reset();
   }catch(err){
     const message = err.message ?? "Login failed";
     if(help) help.textContent = message;
@@ -131,13 +181,54 @@ async function handleLogin(e){
   }
 }
 
+async function handleRegister(e){
+  e.preventDefault();
+  const formData = asFormData(e.target);
+  const username = formData.username?.trim();
+  const password = formData.password?.trim();
+  const confirmPassword = formData.confirmPassword?.trim();
+  const help = qs("#registerMsg");
+
+  if(help) help.textContent = "";
+  if(!username || !password || !confirmPassword){
+    if(help) help.textContent = "All fields are required.";
+    return;
+  }
+  if(password.length < 6){
+    if(help) help.textContent = "Password must be at least 6 characters.";
+    return;
+  }
+  if(password !== confirmPassword){
+    if(help) help.textContent = "Passwords do not match.";
+    return;
+  }
+
+  qs("#registerBtn").disabled = true;
+  try{
+    await api(API.endpoints.register, {
+      method: "POST",
+      body: JSON.stringify({ username, password })
+    });
+    e.target.reset();
+    const loginMsg = qs("#loginMsg");
+    if(loginMsg) loginMsg.textContent = "Account created. Please sign in.";
+    if(help) help.textContent = "Account created successfully.";
+    toggleAuthView("login");
+  }catch(err){
+    const message = err.message ?? "Registration failed";
+    if(help) help.textContent = message;
+    toast(message);
+  }finally{
+    qs("#registerBtn").disabled = false;
+  }
+}
+
 function logout(){
   clearSession();
-  qs("#auth").style.display = "grid";
-  qs("header").style.display = "none";
-  qs("main").style.display = "none";
-  const loginMsg = qs("#loginMsg");
-  if(loginMsg) loginMsg.textContent = "";
+  clearAuthMessages();
+  qs("#loginForm")?.reset();
+  qs("#registerForm")?.reset();
+  showLoginShell("login");
 }
 
 async function hydrateApp(){
@@ -830,6 +921,7 @@ function handleDatasheetChange(){
 
 function setupEventListeners(){
   qs('#loginForm')?.addEventListener('submit', handleLogin);
+  qs('#registerForm')?.addEventListener('submit', handleRegister);
   qs('#btnLogout')?.addEventListener('click', logout);
   qs('#togglePw')?.addEventListener('click', e => {
     e.preventDefault();
@@ -838,6 +930,15 @@ function setupEventListeners(){
     const nextType = input.type === 'password' ? 'text' : 'password';
     input.type = nextType;
     e.currentTarget.textContent = nextType === 'password' ? 'Show' : 'Hide';
+  });
+  qs('#goRegister')?.addEventListener('click', () => {
+    clearAuthMessages();
+    qs('#registerForm')?.reset();
+    toggleAuthView('register');
+  });
+  qs('#backToLogin')?.addEventListener('click', () => {
+    clearAuthMessages();
+    toggleAuthView('login');
   });
   qsa('.tab').forEach(btn => btn.addEventListener('click', () => setTab(btn.dataset.tab)));
   qs('#refreshBtn')?.addEventListener('click', refreshAll);
@@ -862,17 +963,14 @@ async function init(){
   if(state.accessToken){
     try{
       await hydrateApp();
-      qs("#auth").style.display = "none";
-      qs("header").style.display = "flex";
-      qs("main").style.display = "block";
+      showAppShell();
     }catch(err){
       console.error(err);
       logout();
     }
   } else {
-    qs("#auth").style.display = "grid";
-    qs("header").style.display = "none";
-    qs("main").style.display = "none";
+    clearAuthMessages();
+    showLoginShell("login");
   }
 }
 

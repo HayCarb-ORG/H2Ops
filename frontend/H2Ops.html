@@ -27,7 +27,7 @@
 
     <div class="auth-grid">
       <div class="auth-card">
-        <form id="loginForm" class="auth-form">
+        <form id="loginForm" class="auth-form" data-auth-pane="login">
           <div class="auth-headline">
             <div>
               <h2 class="auth-title">Welcome back</h2>
@@ -59,6 +59,50 @@
           <div class="auth-demo">
             <b>Demo credentials</b>: <code>Executive Officer</code> / <code>H2Ops2025</code>
           </div>
+
+          <p class="auth-switch">Need an account?
+            <button type="button" class="auth-link" id="goRegister">Create one</button>
+          </p>
+        </form>
+
+        <form id="registerForm" class="auth-form" data-auth-pane="register" style="display:none">
+          <div class="auth-headline">
+            <div>
+              <h2 class="auth-title">Create your access</h2>
+              <p class="auth-sub">Add a new operator who can sign into the H2Ops dashboard.</p>
+            </div>
+            <span class="auth-state"><span class="dot"></span> Secure setup</span>
+          </div>
+
+          <div class="auth-row">
+            <div class="field">
+              <span class="tag">Username</span>
+              <input id="registerUser" name="username" placeholder="Choose a unique name" autocomplete="username" required>
+            </div>
+          </div>
+
+          <div class="auth-row">
+            <div class="field">
+              <span class="tag">Password</span>
+              <input id="registerPass" name="password" type="password" placeholder="Min 6 characters" autocomplete="new-password" minlength="6" required>
+            </div>
+          </div>
+
+          <div class="auth-row">
+            <div class="field">
+              <span class="tag">Confirm password</span>
+              <input id="registerConfirm" name="confirmPassword" type="password" placeholder="Re-enter password" autocomplete="new-password" minlength="6" required>
+            </div>
+          </div>
+
+          <div class="auth-actions">
+            <button type="submit" class="btn" id="registerBtn">Create account</button>
+            <span id="registerMsg" class="auth-help"></span>
+          </div>
+
+          <p class="auth-switch">Already registered?
+            <button type="button" class="auth-link" id="backToLogin">Back to sign in</button>
+          </p>
         </form>
       </div>
 
