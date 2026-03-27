@@ -1967,26 +1967,165 @@ function showTab(id){ $$('.panel').forEach(p=>p.hidden=true); $(`#panel-${id}`).
 $$('.tab').forEach(b=> b.addEventListener('click', ()=> showTab(b.dataset.tab)));
 
 /* ===== logbook ===== */
-function renderLogs(){ const logs=LS.get(key('logs'),[]).sort((a,b)=>b.ts-a.ts); const box=$('#logTable'); if(!logs.length){ box.innerHTML='<div class="empty">No logs yet.</div>'; return; } box.innerHTML='<table class="table" id="tblLogs"><thead><tr><th>Time</th><th>Executive Officer</th><th>Note</th><th></th></tr></thead><tbody>'+logs.map(l=>`<tr><td>${new Date(l.ts).toLocaleString()}</td><td>${l.op||''}</td><td>${l.text}</td><td><button class="secondary" onclick="delLog('${l.id}')">Delete</button></td></tr>`).join('')+'</tbody></table>'; }
-function addLog(){ const text=$('#logText').value.trim(); if(!text) return; const logs=LS.get(key('logs'),[]); logs.push({id:rid(),ts:Date.now(),text,op:$('#operator').value.trim()}); LS.set(key('logs'),logs); $('#logText').value=''; renderLogs(); renderDashboard(); }
-function delLog(id){ const logs=LS.get(key('logs'),[]).filter(x=>x.id!==id); LS.set(key('logs'),logs); renderLogs(); }
+
+// ===== LOGBOOK: API-BASED =====
+async function renderLogs() {
+  const box = $('#logTable');
+  const token = localStorage.getItem('token');
+  if (!token) { box.innerHTML = '<div class="empty">Not logged in.</div>'; return; }
+  try {
+    const res = await fetch('http://localhost:5000/api/logs', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!res.ok) throw new Error('Failed to fetch logs');
+    const logs = (await res.json()).sort((a, b) => b.ts - a.ts);
+    if (!logs.length) { box.innerHTML = '<div class="empty">No logs yet.</div>'; return; }
+    box.innerHTML = '<table class="table" id="tblLogs"><thead><tr><th>Time</th><th>Executive Officer</th><th>Note</th><th></th></tr></thead><tbody>' +
+      logs.map(l => `<tr><td>${new Date(l.ts).toLocaleString()}</td><td>${l.op || ''}</td><td>${l.text}</td><td><button class="secondary" onclick="delLog('${l._id || l.id}')">Delete</button></td></tr>`).join('') + '</tbody></table>';
+  } catch (e) {
+    box.innerHTML = '<div class="empty">Error loading logs.</div>';
+  }
+}
+
+async function addLog() {
+  const text = $('#logText').value.trim();
+  if (!text) return;
+  const token = localStorage.getItem('token');
+  const op = $('#operator').value.trim();
+  try {
+    const res = await fetch('http://localhost:5000/api/logs', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token
+      },
+      body: JSON.stringify({ text, op })
+    });
+    if (!res.ok) throw new Error('Failed to add log');
+    $('#logText').value = '';
+    await renderLogs();
+    renderDashboard();
+  } catch (e) {
+    alert('Error adding log.');
+  }
+}
+
+async function delLog(id) {
+  const token = localStorage.getItem('token');
+  try {
+    const res = await fetch(`http://localhost:5000/api/logs/${id}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!res.ok) throw new Error('Failed to delete log');
+    await renderLogs();
+  } catch (e) {
+    alert('Error deleting log.');
+  }
+}
+
 $('#btnAddLog').addEventListener('click', addLog);
-$('#btnExportLogsXLS').addEventListener('click', ()=>{
+$('#btnExportLogsXLS').addEventListener('click', async () => {
+  await renderLogs();
   const tbl = $('#tblLogs')?.outerHTML || '<table><tr><td>No logs</td></tr></table>';
   tableDLxls(`logs_${slug(getPlant())}.xls`, tbl, 'Logs');
 });
 
 /* ===== incidents ===== */
-function addIncident(){ const i={id:rid(),ts:Date.now(),title:$('#inc_title').value.trim(),type:$('#inc_type').value,sev:$('#inc_sev').value,desc:$('#inc_desc').value.trim(),action:$('#inc_action').value.trim(),status:'Open',op:$('#operator').value.trim()}; if(!i.title) return alert('Add a title'); const list=LS.get(key('incidents'),[]); list.push(i); LS.set(key('incidents'),list); $('#inc_title').value=''; $('#inc_desc').value=''; $('#inc_action').value=''; renderIncidents(); renderDashboard(); }
-function renderIncidents(){ const list=LS.get(key('incidents'),[]).sort((a,b)=>b.ts-a.ts); const box=$('#incList'); if(!list.length){ box.innerHTML='<div class="empty">No incidents recorded.</div>'; return; } box.innerHTML=list.map(i=>`<div class="kpi" style="margin:8px 0"><div class="row" style="justify-content:space-between"><div><b>${i.title}</b> <span class="pill2">${i.type}</span> <span class="pill2">${i.sev}</span></div><div class="help">${new Date(i.ts).toLocaleString()}</div></div><div class="help" style="margin:6px 0">${i.desc}</div><div class="help"><b>Action:</b> ${i.action||'—'}</div><div class="right" style="margin-top:6px"><button class="secondary" onclick="toggleIncident('${i.id}')">Mark ${i.status==='Open'?'Resolved':'Open'}</button><button class="secondary" onclick="delIncident('${i.id}')">Delete</button></div><div class="help">Status: <b class="${i.status==='Open'?'warn':'ok'}">${i.status}</b> • Op: ${i.op||''}</div></div>`).join(''); }
-function toggleIncident(id){ const list=LS.get(key('incidents'),[]); const i=list.find(x=>x.id===id); if(i){ i.status=i.status==='Open'?'Resolved':'Open'; LS.set(key('incidents'),list); renderIncidents(); } }
-function delIncident(id){ const list=LS.get(key('incidents'),[]).filter(x=>x.id!==id); LS.set(key('incidents'),list); renderIncidents(); }
+
+// ===== INCIDENTS: API-BASED =====
+async function renderIncidents() {
+  const box = $('#incList');
+  const token = localStorage.getItem('token');
+  if (!token) { box.innerHTML = '<div class="empty">Not logged in.</div>'; return; }
+  try {
+    const res = await fetch('http://localhost:5000/api/incidents', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!res.ok) throw new Error('Failed to fetch incidents');
+    const list = (await res.json()).sort((a, b) => b.ts - a.ts);
+    if (!list.length) { box.innerHTML = '<div class="empty">No incidents recorded.</div>'; return; }
+    box.innerHTML = list.map(i => `<div class="kpi" style="margin:8px 0"><div class="row" style="justify-content:space-between"><div><b>${i.title}</b> <span class="pill2">${i.type}</span> <span class="pill2">${i.sev}</span></div><div class="help">${new Date(i.ts).toLocaleString()}</div></div><div class="help" style="margin:6px 0">${i.desc}</div><div class="help"><b>Action:</b> ${i.action || '—'}</div><div class="right" style="margin-top:6px"><button class="secondary" onclick="toggleIncident('${i._id || i.id}', '${i.status}')">Mark ${i.status === 'Open' ? 'Resolved' : 'Open'}</button><button class="secondary" onclick="delIncident('${i._id || i.id}')">Delete</button></div><div class="help">Status: <b class="${i.status === 'Open' ? 'warn' : 'ok'}">${i.status}</b> • Op: ${i.op || ''}</div></div>`).join('');
+  } catch (e) {
+    box.innerHTML = '<div class="empty">Error loading incidents.</div>';
+  }
+}
+
+async function addIncident() {
+  const i = {
+    title: $('#inc_title').value.trim(),
+    type: $('#inc_type').value,
+    sev: $('#inc_sev').value,
+    desc: $('#inc_desc').value.trim(),
+    action: $('#inc_action').value.trim(),
+    op: $('#operator').value.trim(),
+    status: 'Open'
+  };
+  if (!i.title) return alert('Add a title');
+  const token = localStorage.getItem('token');
+  try {
+    const res = await fetch('http://localhost:5000/api/incidents', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token
+      },
+      body: JSON.stringify(i)
+    });
+    if (!res.ok) throw new Error('Failed to add incident');
+    $('#inc_title').value = '';
+    $('#inc_desc').value = '';
+    $('#inc_action').value = '';
+    await renderIncidents();
+    renderDashboard();
+  } catch (e) {
+    alert('Error adding incident.');
+  }
+}
+
+async function toggleIncident(id, currentStatus) {
+  const token = localStorage.getItem('token');
+  const newStatus = currentStatus === 'Open' ? 'Resolved' : 'Open';
+  try {
+    const res = await fetch(`http://localhost:5000/api/incidents/${id}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token
+      },
+      body: JSON.stringify({ status: newStatus })
+    });
+    if (!res.ok) throw new Error('Failed to update incident');
+    await renderIncidents();
+  } catch (e) {
+    alert('Error updating incident.');
+  }
+}
+
+async function delIncident(id) {
+  const token = localStorage.getItem('token');
+  try {
+    const res = await fetch(`http://localhost:5000/api/incidents/${id}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!res.ok) throw new Error('Failed to delete incident');
+    await renderIncidents();
+  } catch (e) {
+    alert('Error deleting incident.');
+  }
+}
+
 $('#btnAddIncident').addEventListener('click', addIncident);
-$('#btnExportIncXLS').addEventListener('click', ()=>{
-  const arr=LS.get(key('incidents'),[]).sort((a,b)=>b.ts-a.ts);
-  const rows = arr.map(i=>`<tr><td>${new Date(i.ts).toLocaleString()}</td><td>${csvEsc(i.title)}</td><td>${i.type}</td><td>${i.sev}</td><td>${i.status}</td><td>${i.op||''}</td><td>${csvEsc(i.desc||'')}</td><td>${csvEsc(i.action||'')}</td></tr>`).join('');
-  const tbl = `<table><thead><tr><th>Time</th><th>Title</th><th>Type</th><th>Severity</th><th>Status</th><th>Executive Officer</th><th>Description</th><th>Action</th></tr></thead><tbody>${rows||'<tr><td colspan="8">No incidents</td></tr>'}</tbody></table>`;
-  tableDLxls(`incidents_${slug(getPlant())}.xls`, tbl, 'Incidents');
+$('#btnExportIncXLS').addEventListener('click', async () => {
+  await renderIncidents();
+  const tbl = $('#incList')?.innerHTML || '<table><tr><td>No incidents</td></tr></table>';
+  // For export, try to extract table if present, else fallback
+  let tableHtml = tbl;
+  if (!tbl.includes('<table')) {
+    tableHtml = '<table><tr><td>No incidents</td></tr></table>';
+  }
+  tableDLxls(`incidents_${slug(getPlant())}.xls`, tableHtml, 'Incidents');
 });
 
 /* ===== data sheets ===== */
