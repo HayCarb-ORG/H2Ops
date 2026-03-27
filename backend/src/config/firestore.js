@@ -14,9 +14,11 @@ if (!admin.apps.length) {
   const serviceAccount = parseServiceAccount();
 
   if (serviceAccount) {
+    console.log("Initializing Firebase Admin with FIREBASE_SERVICE_ACCOUNT credentials");
     credential = admin.credential.cert(serviceAccount);
   } else {
     try {
+      console.log("Initializing Firebase Admin with application default credentials");
       credential = admin.credential.applicationDefault();
     } catch (error) {
       throw new Error(
@@ -26,9 +28,11 @@ if (!admin.apps.length) {
   }
 
   admin.initializeApp({ credential });
+  console.log("Firebase Admin SDK initialized");
 }
 
 const db = admin.firestore();
 db.settings({ ignoreUndefinedProperties: true });
+console.log("Firestore client ready");
 
 module.exports = { admin, db };
