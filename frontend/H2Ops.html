@@ -27,39 +27,40 @@
 
     <div class="auth-grid">
       <div class="auth-card">
-        <div class="auth-headline">
-          <div>
-            <h2 class="auth-title">Welcome back</h2>
-            <p class="auth-sub">Sign in to access your plant records stored on this device.</p>
+        <form id="loginForm" class="auth-form">
+          <div class="auth-headline">
+            <div>
+              <h2 class="auth-title">Welcome back</h2>
+              <p class="auth-sub">Sign in to access your plant records stored on this device.</p>
+            </div>
+            <span class="auth-state"><span class="dot"></span> Offline-ready</span>
           </div>
-          <span class="auth-state"><span class="dot"></span> Offline-ready</span>
-        </div>
 
-        <div class="auth-row">
-          <div class="field">
-            <span class="tag">Username</span>
-            <input id="loginUser" placeholder="e.g., Executive Officer" autocomplete="username">
+          <div class="auth-row">
+            <div class="field">
+              <span class="tag">Username</span>
+              <input id="loginUser" name="username" placeholder="e.g., Executive Officer" autocomplete="username" required>
+            </div>
           </div>
-        </div>
 
-        <div class="auth-row">
-          <div class="field">
-            <span class="tag">Password</span>
-            <input id="loginPass" type="password" placeholder="••••••••" autocomplete="current-password">
-            <button id="togglePw" class="btn secondary" style="padding:6px 10px">Show</button>
+          <div class="auth-row">
+            <div class="field">
+              <span class="tag">Password</span>
+              <input id="loginPass" name="password" type="password" placeholder="••••••••" autocomplete="current-password" required>
+              <button type="button" id="togglePw" class="btn secondary" style="padding:6px 10px">Show</button>
+            </div>
           </div>
-        </div>
 
-        <div class="auth-actions">
-          <button class="btn" id="loginBtn">Sign in</button>
-          <span id="loginMsg" class="auth-help"></span>
-        </div>
+          <div class="auth-actions">
+            <button type="submit" class="btn" id="loginBtn">Sign in</button>
+            <span id="loginMsg" class="auth-help"></span>
+          </div>
 
-        <div class="auth-demo">
-          <b>Demo credentials</b>: <code>Executive Officer</code> / <code>H2Ops2025</code>
-        </div>
-
-</div>
+          <div class="auth-demo">
+            <b>Demo credentials</b>: <code>Executive Officer</code> / <code>H2Ops2025</code>
+          </div>
+        </form>
+      </div>
 
       <div class="side-card">
         <div class="side-top">

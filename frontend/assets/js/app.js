@@ -64,12 +64,24 @@ async function refreshSession(){
 }
 
 function saveSession(data){
-  state.accessToken = data.accessToken;
-  state.refreshToken = data.refreshToken;
-  state.user = data.user;
-  localStorage.setItem("token", data.accessToken);
-  localStorage.setItem("refreshToken", data.refreshToken);
-  localStorage.setItem("user", JSON.stringify(data.user));
+  const accessToken = data.accessToken || data.token;
+  if(!accessToken) throw new Error("Missing access token in response");
+  state.accessToken = accessToken;
+  localStorage.setItem("token", accessToken);
+
+  const refreshToken = data.refreshToken || "";
+  state.refreshToken = refreshToken;
+  if(refreshToken){
+    localStorage.setItem("refreshToken", refreshToken);
+  } else {
+    localStorage.removeItem("refreshToken");
+  }
+
+  const user = data.user || {
+    name: data.username || data.email || "Operator"
+  };
+  state.user = user;
+  localStorage.setItem("user", JSON.stringify(user));
 }
 
 function clearSession(){
@@ -83,20 +95,37 @@ function clearSession(){
 
 async function handleLogin(e){
   e.preventDefault();
-  const { email, password } = asFormData(e.target);
+  const formData = asFormData(e.target);
+  const username = formData.username?.trim();
+  const password = formData.password?.trim();
+  const help = qs("#loginMsg");
+
+  if(help) help.textContent = "";
+  if(!username || !password){
+    if(help) help.textContent = "Enter both username and password.";
+    return;
+  }
+
   qs("#loginBtn").disabled = true;
   try{
     const data = await api(API.endpoints.login, {
       method: "POST",
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ username, password })
     });
-    saveSession(data);
+    const normalized = {
+      ...data,
+      user: data.user || { name: data.username || username }
+    };
+    saveSession(normalized);
     await hydrateApp();
     qs("#auth").style.display = "none";
     qs("header").style.display = "flex";
     qs("main").style.display = "block";
+    qs("#loginForm")?.reset();
   }catch(err){
-    toast(err.message ?? "Login failed");
+    const message = err.message ?? "Login failed";
+    if(help) help.textContent = message;
+    toast(message);
   }finally{
     qs("#loginBtn").disabled = false;
   }
@@ -107,6 +136,8 @@ function logout(){
   qs("#auth").style.display = "grid";
   qs("header").style.display = "none";
   qs("main").style.display = "none";
+  const loginMsg = qs("#loginMsg");
+  if(loginMsg) loginMsg.textContent = "";
 }
 
 async function hydrateApp(){
@@ -237,7 +268,9 @@ function renderSOP(){
 function renderUser(){
   const user = state.user;
   if(!user) return;
-  qs("#userName").textContent = user.name || user.email;
+  const label = user.name || user.username || user.email || "Operator";
+  const badge = qs("#userBadge") || qs("#userName");
+  if(badge) badge.textContent = label;
 }
 
 function renderPlants(){
@@ -797,7 +830,15 @@ function handleDatasheetChange(){
 
 function setupEventListeners(){
   qs('#loginForm')?.addEventListener('submit', handleLogin);
-  qs('#logoutBtn')?.addEventListener('click', logout);
+  qs('#btnLogout')?.addEventListener('click', logout);
+  qs('#togglePw')?.addEventListener('click', e => {
+    e.preventDefault();
+    const input = qs('#loginPass');
+    if(!input) return;
+    const nextType = input.type === 'password' ? 'text' : 'password';
+    input.type = nextType;
+    e.currentTarget.textContent = nextType === 'password' ? 'Show' : 'Hide';
+  });
   qsa('.tab').forEach(btn => btn.addEventListener('click', () => setTab(btn.dataset.tab)));
   qs('#refreshBtn')?.addEventListener('click', refreshAll);
   qs('#datasheetSelect')?.addEventListener('change', handleDatasheetChange);
@@ -828,6 +869,10 @@ async function init(){
       console.error(err);
       logout();
     }
+  } else {
+    qs("#auth").style.display = "grid";
+    qs("header").style.display = "none";
+    qs("main").style.display = "none";
   }
 }
 
