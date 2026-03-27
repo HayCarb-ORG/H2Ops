@@ -5,6 +5,7 @@ const router = express.Router();
 const authController = require('../controllers/authcontroller');
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
+const authMiddleware = require('../middleware/auth');
 
 // Register new user (admin only, or for initial setup)
 router.post('/register', async (req, res) => {
@@ -30,5 +31,6 @@ router.post('/register', async (req, res) => {
 });
 
 router.post('/login', authController.login);
+router.get('/users', authMiddleware, authController.listUsers);
 
 module.exports = router;

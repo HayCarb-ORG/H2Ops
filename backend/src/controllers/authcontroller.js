@@ -18,3 +18,16 @@ exports.login = async (req, res) => {
     res.status(500).json(payload);
   }
 };
+
+// LIST USERS (protected)
+exports.listUsers = async (req, res) => {
+  try {
+    const users = await User.find().select('-password');
+    res.json(users);
+  } catch (err) {
+    console.error('List users error:', err);
+    const payload = { message: 'Server error' };
+    if (process.env.NODE_ENV !== 'production') payload.details = err.message;
+    res.status(500).json(payload);
+  }
+};
