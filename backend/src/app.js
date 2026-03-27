@@ -1,14 +1,21 @@
 const express = require("express");
-const cors = require("cors");
+const corsConfig = require("./middleware/corsConfig");
+const authMiddleware = require("./middleware/auth");
 
-const authRoutes = require("./routes/authRoutes");
+const authRoutes = require("./routes/auth");
+const logRoutes = require("./routes/logs");
+const incidentRoutes = require("./routes/incidents");
 
 const app = express();
 
-app.use(cors());
+app.use(corsConfig);
 app.use(express.json());
 
-// routes
+// Public routes
 app.use("/api/auth", authRoutes);
+
+// Protected routes
+app.use("/api/logs", authMiddleware, logRoutes);
+app.use("/api/incidents", authMiddleware, incidentRoutes);
 
 module.exports = app;
