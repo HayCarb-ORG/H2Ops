@@ -1826,6 +1826,8 @@
 </main>
 
 <script>
+
+
 /* ===== tiny helpers ===== */
 const $ = (s, root=document) => root.querySelector(s);
 const $$ = (s, root=document) => Array.from(root.querySelectorAll(s));
@@ -1898,9 +1900,29 @@ function loginSuccess(username){
   if(!curOp){ $('#operator').value = username; localStorage.setItem(`${NS}:${getPlant()}:operator`, JSON.stringify(username)); }
   ensureDefaults(); fillPlantPicker(); refreshAll(); showTab('dash');
 }
-$('#loginBtn').addEventListener('click', ()=>{
-  const u=($('#loginUser').value||'').trim(), p=$('#loginPass').value||'';
-  if(u===DEMO.username && p===DEMO.password) loginSuccess(u); else $('#loginMsg').textContent='Invalid username or password';
+$('#loginBtn').addEventListener('click', async () => {
+
+  const username = $('#loginUser').value.trim();
+  const password = $('#loginPass').value;
+
+  const res = await fetch("http://localhost:5000/api/auth/login", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ username, password })
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    $('#loginMsg').textContent = data.message;
+    return;
+  }
+
+  localStorage.setItem("token", data.token);
+  loginSuccess(username);
+
 });
 $('#loginUser').addEventListener('keydown', e=>{ if(e.key==='Enter') $('#loginPass').focus(); });
 $('#loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter') $('#loginBtn').click(); });
