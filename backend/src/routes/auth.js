@@ -15,13 +15,17 @@ router.post('/register', async (req, res) => {
     const existing = await User.findOne({ username });
     if (existing) return res.status(409).json({ message: 'User already exists' });
 
-    const hashed = await bcrypt.hash(password, 10);
-    const user = new User({ username, password: hashed });
+    const user = new User({ username, password });
     await user.save();
 
     res.status(201).json({ message: 'User created' });
   } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    console.error('Register error:', err);
+    if (err.code === 11000) return res.status(409).json({ message: 'User already exists' });
+
+    const payload = { message: 'Server error' };
+    if (process.env.NODE_ENV !== 'production') payload.details = err.message;
+    res.status(500).json(payload);
   }
 });
 

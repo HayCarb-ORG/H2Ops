@@ -7,7 +7,7 @@ const IncidentSchema = new mongoose.Schema({
   severity: { type: String, required: true },
   description: { type: String, required: true },
   action: { type: String, required: true },
-  status: { type: String, required: true },
+  status: { type: String, required: true, default: 'Open' },
   operator: { type: String, required: true },
   createdAt: { type: Date, default: Date.now },
 });

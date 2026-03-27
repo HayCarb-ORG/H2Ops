@@ -7,11 +7,10 @@ const UserSchema = new mongoose.Schema({
   password: { type: String, required: true }, // Hashed password
 });
 
-// Hash password before saving
-UserSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
+// Hash password before saving (async middleware should not use next())
+UserSchema.pre('save', async function() {
+  if (!this.isModified('password')) return;
   this.password = await bcrypt.hash(this.password, 10);
-  next();
 });
 
 // Compare password method

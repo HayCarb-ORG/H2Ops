@@ -1973,17 +1973,26 @@ async function renderLogs() {
   const box = $('#logTable');
   const token = localStorage.getItem('token');
   if (!token) { box.innerHTML = '<div class="empty">Not logged in.</div>'; return; }
+  const renderList = (list=[]) => {
+    if (!list.length) { box.innerHTML = '<div class="empty">No logs yet.</div>'; return; }
+    box.innerHTML = '<table class="table" id="tblLogs"><thead><tr><th>Time</th><th>Executive Officer</th><th>Note</th><th></th></tr></thead><tbody>' +
+      list.map(l => `<tr><td>${new Date(l.ts).toLocaleString()}</td><td>${l.op || ''}</td><td>${l.text}</td><td><button class="secondary" onclick="delLog('${l.id || l._id}')">Delete</button></td></tr>`).join('') + '</tbody></table>';
+  };
   try {
     const res = await fetch('http://localhost:5000/api/logs', {
       headers: { 'Authorization': 'Bearer ' + token }
     });
-    if (!res.ok) throw new Error('Failed to fetch logs');
-    const logs = (await res.json()).sort((a, b) => b.ts - a.ts);
-    if (!logs.length) { box.innerHTML = '<div class="empty">No logs yet.</div>'; return; }
-    box.innerHTML = '<table class="table" id="tblLogs"><thead><tr><th>Time</th><th>Executive Officer</th><th>Note</th><th></th></tr></thead><tbody>' +
-      logs.map(l => `<tr><td>${new Date(l.ts).toLocaleString()}</td><td>${l.op || ''}</td><td>${l.text}</td><td><button class="secondary" onclick="delLog('${l._id || l.id}')">Delete</button></td></tr>`).join('') + '</tbody></table>';
+    const payload = await res.json().catch(() => []);
+    if (!res.ok) throw new Error(payload?.message || 'Failed to fetch logs');
+    const logs = Array.isArray(payload) ? payload.sort((a, b) => b.ts - a.ts) : [];
+    LS.set(key('logs'), logs);
+    renderDashboard();
+    renderList(logs);
   } catch (e) {
-    box.innerHTML = '<div class="empty">Error loading logs.</div>';
+    console.error(e);
+    const cached = LS.get(key('logs'), []);
+    if (cached.length) { renderList(cached); }
+    else { box.innerHTML = '<div class="empty">Error loading logs.</div>'; }
   }
 }
 
@@ -1992,6 +2001,7 @@ async function addLog() {
   if (!text) return;
   const token = localStorage.getItem('token');
   const op = $('#operator').value.trim();
+  const session = (()=>{ try{return JSON.parse(localStorage.getItem(`${NS}:session`)) || {}; }catch{return {};} })();
   try {
     const res = await fetch('http://localhost:5000/api/logs', {
       method: 'POST',
@@ -1999,14 +2009,15 @@ async function addLog() {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + token
       },
-      body: JSON.stringify({ text, op })
+      body: JSON.stringify({ text, operator: op || session.username })
     });
-    if (!res.ok) throw new Error('Failed to add log');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.message || 'Failed to add log');
     $('#logText').value = '';
     await renderLogs();
     renderDashboard();
   } catch (e) {
-    alert('Error adding log.');
+    alert(e.message || 'Error adding log.');
   }
 }
 
@@ -2017,10 +2028,13 @@ async function delLog(id) {
       method: 'DELETE',
       headers: { 'Authorization': 'Bearer ' + token }
     });
-    if (!res.ok) throw new Error('Failed to delete log');
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data?.message || 'Failed to delete log');
+    }
     await renderLogs();
   } catch (e) {
-    alert('Error deleting log.');
+    alert(e.message || 'Error deleting log.');
   }
 }
 
@@ -2038,16 +2052,25 @@ async function renderIncidents() {
   const box = $('#incList');
   const token = localStorage.getItem('token');
   if (!token) { box.innerHTML = '<div class="empty">Not logged in.</div>'; return; }
+  const renderList = (list=[]) => {
+    if (!list.length) { box.innerHTML = '<div class="empty">No incidents recorded.</div>'; return; }
+    box.innerHTML = list.map(i => `<div class="kpi" style="margin:8px 0"><div class="row" style="justify-content:space-between"><div><b>${i.title}</b> <span class="pill2">${i.type}</span> <span class="pill2">${i.sev}</span></div><div class="help">${new Date(i.ts).toLocaleString()}</div></div><div class="help" style="margin:6px 0">${i.desc}</div><div class="help"><b>Action:</b> ${i.action || '—'}</div><div class="right" style="margin-top:6px"><button class="secondary" onclick="toggleIncident('${i.id || i._id}', '${i.status}')">Mark ${i.status === 'Open' ? 'Resolved' : 'Open'}</button><button class="secondary" onclick="delIncident('${i.id || i._id}')">Delete</button></div><div class="help">Status: <b class="${i.status === 'Open' ? 'warn' : 'ok'}">${i.status}</b> • Op: ${i.op || ''}</div></div>`).join('');
+  };
   try {
     const res = await fetch('http://localhost:5000/api/incidents', {
       headers: { 'Authorization': 'Bearer ' + token }
     });
-    if (!res.ok) throw new Error('Failed to fetch incidents');
-    const list = (await res.json()).sort((a, b) => b.ts - a.ts);
-    if (!list.length) { box.innerHTML = '<div class="empty">No incidents recorded.</div>'; return; }
-    box.innerHTML = list.map(i => `<div class="kpi" style="margin:8px 0"><div class="row" style="justify-content:space-between"><div><b>${i.title}</b> <span class="pill2">${i.type}</span> <span class="pill2">${i.sev}</span></div><div class="help">${new Date(i.ts).toLocaleString()}</div></div><div class="help" style="margin:6px 0">${i.desc}</div><div class="help"><b>Action:</b> ${i.action || '—'}</div><div class="right" style="margin-top:6px"><button class="secondary" onclick="toggleIncident('${i._id || i.id}', '${i.status}')">Mark ${i.status === 'Open' ? 'Resolved' : 'Open'}</button><button class="secondary" onclick="delIncident('${i._id || i.id}')">Delete</button></div><div class="help">Status: <b class="${i.status === 'Open' ? 'warn' : 'ok'}">${i.status}</b> • Op: ${i.op || ''}</div></div>`).join('');
+    const payload = await res.json().catch(() => []);
+    if (!res.ok) throw new Error(payload?.message || 'Failed to fetch incidents');
+    const list = Array.isArray(payload) ? payload.sort((a, b) => b.ts - a.ts) : [];
+    LS.set(key('incidents'), list);
+    renderDashboard();
+    renderList(list);
   } catch (e) {
-    box.innerHTML = '<div class="empty">Error loading incidents.</div>';
+    console.error(e);
+    const cached = LS.get(key('incidents'), []);
+    if (cached.length) { renderList(cached); }
+    else { box.innerHTML = '<div class="empty">Error loading incidents.</div>'; }
   }
 }
 
@@ -2070,16 +2093,25 @@ async function addIncident() {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + token
       },
-      body: JSON.stringify(i)
+      body: JSON.stringify({
+        title: i.title,
+        type: i.type,
+        severity: i.sev,
+        description: i.desc,
+        action: i.action,
+        operator: i.op,
+        status: i.status,
+      })
     });
-    if (!res.ok) throw new Error('Failed to add incident');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.message || 'Failed to add incident');
     $('#inc_title').value = '';
     $('#inc_desc').value = '';
     $('#inc_action').value = '';
     await renderIncidents();
     renderDashboard();
   } catch (e) {
-    alert('Error adding incident.');
+    alert(e.message || 'Error adding incident.');
   }
 }
 
@@ -2095,10 +2127,12 @@ async function toggleIncident(id, currentStatus) {
       },
       body: JSON.stringify({ status: newStatus })
     });
-    if (!res.ok) throw new Error('Failed to update incident');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.message || 'Failed to update incident');
     await renderIncidents();
+    renderDashboard();
   } catch (e) {
-    alert('Error updating incident.');
+    alert(e.message || 'Error updating incident.');
   }
 }
 
@@ -2109,10 +2143,14 @@ async function delIncident(id) {
       method: 'DELETE',
       headers: { 'Authorization': 'Bearer ' + token }
     });
-    if (!res.ok) throw new Error('Failed to delete incident');
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data?.message || 'Failed to delete incident');
+    }
     await renderIncidents();
+    renderDashboard();
   } catch (e) {
-    alert('Error deleting incident.');
+    alert(e.message || 'Error deleting incident.');
   }
 }
 
