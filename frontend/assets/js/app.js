@@ -54,6 +54,34 @@ const escapeHtml = (value = "") =>
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 const toast = (message) => window.alert(message);
+let flashTimer = null;
+
+function showFlash(message, type = "info", duration = 3500) {
+  const el = qs("#flash");
+  if (!el) return;
+  el.textContent = message;
+  el.dataset.type = type;
+  el.hidden = false;
+  el.classList.add("flash-show");
+  el.classList.remove("flash-hide");
+  if (flashTimer) clearTimeout(flashTimer);
+  flashTimer = window.setTimeout(() => hideFlash(), duration);
+}
+
+function hideFlash() {
+  const el = qs("#flash");
+  if (!el) return;
+  if (flashTimer) {
+    clearTimeout(flashTimer);
+    flashTimer = null;
+  }
+  el.classList.remove("flash-show");
+  el.classList.add("flash-hide");
+  window.setTimeout(() => {
+    el.hidden = true;
+    el.classList.remove("flash-hide");
+  }, 220);
+}
 
 async function api(path, options = {}) {
   const url = path.startsWith("http") ? path : `${API.base}${path}`;
@@ -128,8 +156,9 @@ function clearSession() {
 
 function handleUnauthorized(message) {
   if (!state.accessToken) return;
-  logout();
+  logout({ silent: true });
   setAuthMessage("#loginMsg", message || "Session expired. Please sign in again.");
+  showFlash(message || "Session expired. Please sign in again.", "error");
 }
 
 function setAuthMessage(selector, message) {
@@ -182,12 +211,19 @@ function showAppShell() {
   }
 }
 
-function logout() {
+function logout(arg) {
+  const isEvent = typeof Event !== "undefined" && arg instanceof Event;
+  const options = isEvent ? {} : arg || {};
+  const silent = Boolean(options.silent);
+  const notice = options.message;
   clearSession();
   clearAuthMessages();
   qs("#loginForm")?.reset();
   qs("#registerForm")?.reset();
   showLoginShell("login");
+  if (!silent) {
+    showFlash(notice || "Signed out.", "info");
+  }
 }
 
 async function handleLogin(event) {
@@ -211,9 +247,11 @@ async function handleLogin(event) {
     renderUser();
     showAppShell();
     await hydrateApp();
+    showFlash("Signed in successfully.", "success");
   } catch (err) {
     console.error(err);
     setAuthMessage("#loginMsg", err.message || "Login failed");
+    showFlash(err.message || "Invalid credentials", "error");
   } finally {
     if (button) button.disabled = false;
   }
@@ -242,11 +280,13 @@ async function handleRegister(event) {
       body: { username, password },
     });
     setAuthMessage("#loginMsg", "Account created. Sign in now.");
+    showFlash("Account created. You can sign in now.", "success");
     toggleAuthView("login");
     qs("#registerForm")?.reset();
   } catch (err) {
     console.error(err);
     setAuthMessage("#registerMsg", err.message || "Registration failed");
+    showFlash(err.message || "Registration failed", "error");
   } finally {
     if (button) button.disabled = false;
   }
