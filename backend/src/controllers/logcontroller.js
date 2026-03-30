@@ -4,13 +4,27 @@ const {
   toMillis,
 } = require("../utils/firestoreCollections");
 
+const coerceNumber = (value) => {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const asText = (value) => (typeof value === "string" ? value.trim() : "");
+
 const formatLog = (doc) => {
   const data = doc.data();
   return {
     id: doc.id,
-    text: data.text,
-    op: data.operator,
-    ts: toMillis(data.createdAt),
+    plant: data.plant || "",
+    plantType: data.plantType || "",
+    parameter: data.parameter || "",
+    value: data.numericValue ?? data.value ?? null,
+    unit: data.unit || "",
+    status: data.status || "OK",
+    notes: data.notes || data.text || "",
+    operator: data.operator || data.op || "",
+    timestamp: toMillis(data.createdAt),
   };
 };
 
@@ -26,14 +40,44 @@ exports.getLogs = async (req, res) => {
 
 exports.createLog = async (req, res) => {
   try {
-    const { text, operator, op } = req.body;
-    if (!text?.trim()) return res.status(400).json({ message: "Log text is required" });
+    const {
+      text,
+      notes,
+      operator,
+      op,
+      parameter,
+      value,
+      unit,
+      status,
+      plant,
+      plantName,
+      plantType,
+      plantCategory,
+    } = req.body;
+
+    const primaryNote = asText(text) || asText(notes);
+    const parameterLabel = asText(parameter);
+    if (!primaryNote && !parameterLabel) {
+      return res.status(400).json({ message: "Provide a note or parameter" });
+    }
+
     const operatorName = operator || op || req.user?.username;
     if (!operatorName) return res.status(400).json({ message: "Operator is required" });
 
+    const numericValue = coerceNumber(value);
+    const recordText = primaryNote || parameterLabel;
+
     const docRef = await logsCollection.add({
-      text: text.trim(),
+      text: recordText,
+      notes: asText(notes) || recordText,
       operator: operatorName,
+      parameter: parameterLabel,
+      value: numericValue ?? value ?? null,
+      numericValue,
+      unit: unit || "",
+      status: status || "OK",
+      plant: plant || plantName || "",
+      plantType: plantType || plantCategory || "",
       createdAt: FieldValue.serverTimestamp(),
     });
     const created = await docRef.get();

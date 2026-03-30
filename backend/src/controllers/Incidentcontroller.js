@@ -8,14 +8,14 @@ const formatIncident = (doc) => {
   const data = doc.data();
   return {
     id: doc.id,
-    title: data.title,
-    type: data.type,
-    sev: data.severity,
-    desc: data.description,
-    action: data.action,
-    status: data.status,
-    op: data.operator,
-    ts: toMillis(data.createdAt),
+    title: data.title || "",
+    type: data.type || "",
+    severity: data.severity || data.sev || "Low",
+    description: data.description || data.desc || "",
+    action: data.action || "",
+    status: data.status || "Open",
+    owner: data.operator || data.op || "",
+    timestamp: toMillis(data.createdAt),
   };
 };
 
@@ -50,11 +50,11 @@ exports.createIncident = async (req, res) => {
     const docRef = await incidentsCollection.add({
       title: title.trim(),
       type,
-      severity: severity || sev,
-      description: description || desc,
-      action,
+      severity: severity || sev || "Low",
+      description: (description || desc || "").trim(),
+      action: action?.trim() || "",
       status: status || "Open",
-      operator: operator || op || req.user?.username,
+      operator: operator || op || req.user?.username || "",
       createdAt: FieldValue.serverTimestamp(),
     });
 

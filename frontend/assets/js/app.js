@@ -1,10 +1,11 @@
+// H2Ops dashboard client script
 const runtimeHost = window.location.hostname;
 const isFileProtocol = window.location.protocol === "file:";
 const isLoopbackHost = ["127.0.0.1", "localhost"].includes(runtimeHost);
 const localBase = "http://localhost:5000/api";
 const remoteBase = "https://h2opsbackend.onrender.com/api";
 const API = {
-  base: (isFileProtocol || isLoopbackHost ? localBase : remoteBase),
+  base: isFileProtocol || isLoopbackHost ? localBase : remoteBase,
   endpoints: {
     login: "/auth/login",
     register: "/auth/register",
@@ -13,217 +14,175 @@ const API = {
     incidents: "/incidents",
     datasheets: "/datasheets",
     users: "/auth/users",
-    sop: "/sop"
-  }
+    sop: "/sop",
+  },
 };
 
 console.info(`[H2Ops] Using API base: ${API.base}`);
 
+const safeParse = (value, fallback = null) => {
+  try {
+    return value ? JSON.parse(value) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 const state = {
   accessToken: localStorage.getItem("token") || "",
   refreshToken: localStorage.getItem("refreshToken") || "",
-  user: JSON.parse(localStorage.getItem("user") || "null"),
-  dashboards: null,
-  lastStatsFetch: null,
-  activeTab: "dash",
-  datasheets: [],
+  user: safeParse(localStorage.getItem("user")),
+  dashboard: null,
   logs: [],
   incidents: [],
-  sop: localStorage.getItem("sop") || '',
-  plants: JSON.parse(localStorage.getItem("plants") || "[]"),
+  datasheetRecords: [],
+  sops: [],
+  activeSopId: null,
+  sopSearch: "",
+  sopChecklist: false,
+  plants: safeParse(localStorage.getItem("plants"), []),
   selectedPlant: localStorage.getItem("selectedPlant") || "",
-  selectedDatasheetId: null
+  activeTab: "dash",
 };
 
-function qs(sel, parent = document){ return parent.querySelector(sel); }
-function qsa(sel, parent = document){ return Array.from(parent.querySelectorAll(sel)); }
-function asFormData(form){
-  const fd = new FormData(form);
-  return Object.fromEntries(fd.entries());
-}
-function toast(msg){
-  alert(msg);
-}
+const persistPlants = () => localStorage.setItem("plants", JSON.stringify(state.plants || []));
+const qs = (selector, parent = document) => parent.querySelector(selector);
+const qsa = (selector, parent = document) => Array.from(parent.querySelectorAll(selector));
+const escapeHtml = (value = "") =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+const toast = (message) => window.alert(message);
 
-async function api(path, options = {}){
-  const headers = options.headers || {};
-  if (state.accessToken) headers["Authorization"] = `Bearer ${state.accessToken}`;
-  if (!(options.body instanceof FormData)) headers["Content-Type"] = "application/json";
-  const res = await fetch(`${API.base}${path}`, { ...options, headers });
-  if (res.status === 401 && state.refreshToken){
-    await refreshSession();
-    return api(path, options);
-  }
-  if (!res.ok) throw new Error((await res.json()).message || "Request failed");
-  return res.json();
-}
+async function api(path, options = {}) {
+  const url = path.startsWith("http") ? path : `${API.base}${path}`;
+  const headers = { ...(options.headers || {}) };
+  let body = options.body;
 
-async function refreshSession(){
-  if (!state.refreshToken) return logout();
-  const res = await fetch(`${API.base}/auth/refresh`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refreshToken: state.refreshToken })
-  });
-  if (!res.ok) return logout();
-  const data = await res.json();
-  state.accessToken = data.accessToken;
-  localStorage.setItem("token", data.accessToken);
-}
-
-function saveSession(data){
-  const accessToken = data.accessToken || data.token;
-  if(!accessToken) throw new Error("Missing access token in response");
-  state.accessToken = accessToken;
-  localStorage.setItem("token", accessToken);
-
-  const refreshToken = data.refreshToken || "";
-  state.refreshToken = refreshToken;
-  if(refreshToken){
-    localStorage.setItem("refreshToken", refreshToken);
-  } else {
-    localStorage.removeItem("refreshToken");
+  if (state.accessToken) headers.Authorization = `Bearer ${state.accessToken}`;
+  const isFormData = body instanceof FormData;
+  if (!isFormData && body && typeof body !== "string") {
+    headers["Content-Type"] = "application/json";
+    body = JSON.stringify(body);
   }
 
-  const user = data.user || {
-    name: data.username || data.email || "Operator"
+  const config = {
+    method: options.method || "GET",
+    headers,
   };
-  state.user = user;
-  localStorage.setItem("user", JSON.stringify(user));
+  if (body !== undefined) config.body = body;
+  const usedAuth = Boolean(headers.Authorization);
+
+  const response = await fetch(url, config);
+  if (!response.ok) {
+    let message = `Request failed (${response.status})`;
+    try {
+      const errorPayload = await response.json();
+      message = errorPayload.message || message;
+    } catch {
+      // ignore JSON parse errors
+    }
+    if (response.status === 401 && usedAuth) {
+      handleUnauthorized(message);
+    }
+    throw new Error(message);
+  }
+
+  if (response.status === 204) return null;
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    return response.json();
+  }
+  return response.text();
 }
 
-function clearSession(){
+function storeSession(payload = {}) {
+  state.accessToken = payload.token || payload.accessToken || "";
+  state.refreshToken = payload.refreshToken || "";
+  state.user = payload.user || null;
+
+  localStorage.setItem("token", state.accessToken);
+  localStorage.setItem("refreshToken", state.refreshToken);
+  if (state.user) {
+    localStorage.setItem("user", JSON.stringify(state.user));
+  } else {
+    localStorage.removeItem("user");
+  }
+}
+
+function clearSession() {
   state.accessToken = "";
   state.refreshToken = "";
   state.user = null;
+  state.dashboard = null;
+  state.logs = [];
+  state.incidents = [];
+  state.datasheetRecords = [];
+  state.sops = [];
+  state.activeSopId = null;
   localStorage.removeItem("token");
   localStorage.removeItem("refreshToken");
   localStorage.removeItem("user");
 }
 
-function clearAuthMessages(){
-  const loginMsg = qs("#loginMsg");
-  const registerMsg = qs("#registerMsg");
-  if(loginMsg) loginMsg.textContent = "";
-  if(registerMsg) registerMsg.textContent = "";
+function handleUnauthorized(message) {
+  if (!state.accessToken) return;
+  logout();
+  setAuthMessage("#loginMsg", message || "Session expired. Please sign in again.");
 }
 
-function toggleAuthView(view){
+function setAuthMessage(selector, message) {
+  const el = qs(selector);
+  if (el) el.textContent = message || "";
+}
+
+function clearAuthMessages() {
+  setAuthMessage("#loginMsg", "");
+  setAuthMessage("#registerMsg", "");
+}
+
+function toggleAuthView(view) {
   const loginForm = qs("#loginForm");
   const registerForm = qs("#registerForm");
-  if(view === "register"){
-    if(loginForm) loginForm.style.display = "none";
-    if(registerForm) registerForm.style.display = "block";
-  } else if(view === "hidden"){
-    if(loginForm) loginForm.style.display = "none";
-    if(registerForm) registerForm.style.display = "none";
-  } else {
-    if(loginForm) loginForm.style.display = "block";
-    if(registerForm) registerForm.style.display = "none";
-  }
+  if (!loginForm || !registerForm) return;
+  const showLogin = view !== "register";
+  loginForm.style.display = showLogin ? "block" : "none";
+  registerForm.style.display = showLogin ? "none" : "block";
 }
 
-function showAppShell(){
-  toggleAuthView("hidden");
-  const authSection = qs("#auth");
-  if(authSection) authSection.style.display = "none";
-  const headerEl = qs("header");
-  if(headerEl) headerEl.style.display = "flex";
-  const mainEl = qs("main");
-  if(mainEl) mainEl.style.display = "block";
-}
-
-function showLoginShell(view = "login"){
+function showLoginShell(view = "login") {
   toggleAuthView(view);
-  const authSection = qs("#auth");
-  if(authSection) authSection.style.display = "grid";
-  const headerEl = qs("header");
-  if(headerEl) headerEl.style.display = "none";
-  const mainEl = qs("main");
-  if(mainEl) mainEl.style.display = "none";
-}
-
-async function handleLogin(e){
-  e.preventDefault();
-  const formData = asFormData(e.target);
-  const username = formData.username?.trim();
-  const password = formData.password?.trim();
-  const help = qs("#loginMsg");
-
-  if(help) help.textContent = "";
-  if(!username || !password){
-    if(help) help.textContent = "Enter both username and password.";
-    return;
+  const auth = qs("#auth");
+  const header = qs("header");
+  const main = qs("main");
+  if (auth) auth.style.display = "block";
+  if (header) {
+    header.hidden = true;
+    header.style.display = "none";
   }
-
-  qs("#loginBtn").disabled = true;
-  try{
-    const data = await api(API.endpoints.login, {
-      method: "POST",
-      body: JSON.stringify({ username, password })
-    });
-    const normalized = {
-      ...data,
-      user: data.user || { name: data.username || username }
-    };
-    saveSession(normalized);
-    await hydrateApp();
-    showAppShell();
-    clearAuthMessages();
-    qs("#loginForm")?.reset();
-    qs("#registerForm")?.reset();
-  }catch(err){
-    const message = err.message ?? "Login failed";
-    if(help) help.textContent = message;
-    toast(message);
-  }finally{
-    qs("#loginBtn").disabled = false;
+  if (main) {
+    main.hidden = true;
+    main.style.display = "none";
   }
 }
 
-async function handleRegister(e){
-  e.preventDefault();
-  const formData = asFormData(e.target);
-  const username = formData.username?.trim();
-  const password = formData.password?.trim();
-  const confirmPassword = formData.confirmPassword?.trim();
-  const help = qs("#registerMsg");
-
-  if(help) help.textContent = "";
-  if(!username || !password || !confirmPassword){
-    if(help) help.textContent = "All fields are required.";
-    return;
+function showAppShell() {
+  const auth = qs("#auth");
+  const header = qs("header");
+  const main = qs("main");
+  if (auth) auth.style.display = "none";
+  if (header) {
+    header.hidden = false;
+    header.style.display = "flex";
   }
-  if(password.length < 6){
-    if(help) help.textContent = "Password must be at least 6 characters.";
-    return;
-  }
-  if(password !== confirmPassword){
-    if(help) help.textContent = "Passwords do not match.";
-    return;
-  }
-
-  qs("#registerBtn").disabled = true;
-  try{
-    await api(API.endpoints.register, {
-      method: "POST",
-      body: JSON.stringify({ username, password })
-    });
-    e.target.reset();
-    const loginMsg = qs("#loginMsg");
-    if(loginMsg) loginMsg.textContent = "Account created. Please sign in.";
-    if(help) help.textContent = "Account created successfully.";
-    toggleAuthView("login");
-  }catch(err){
-    const message = err.message ?? "Registration failed";
-    if(help) help.textContent = message;
-    toast(message);
-  }finally{
-    qs("#registerBtn").disabled = false;
+  if (main) {
+    main.hidden = false;
+    main.style.display = "block";
   }
 }
 
-function logout(){
+function logout() {
   clearSession();
   clearAuthMessages();
   qs("#loginForm")?.reset();
@@ -231,747 +190,802 @@ function logout(){
   showLoginShell("login");
 }
 
-async function hydrateApp(){
-  await Promise.all([
+async function handleLogin(event) {
+  event.preventDefault();
+  clearAuthMessages();
+  const username = qs("#loginUser")?.value.trim();
+  const password = qs("#loginPass")?.value;
+  if (!username || !password) {
+    setAuthMessage("#loginMsg", "Enter username and password.");
+    return;
+  }
+  const button = qs("#loginBtn");
+  if (button) button.disabled = true;
+
+  try {
+    const data = await api(API.endpoints.login, {
+      method: "POST",
+      body: { username, password },
+    });
+    storeSession({ token: data.token, user: { username: data.username } });
+    renderUser();
+    showAppShell();
+    await hydrateApp();
+  } catch (err) {
+    console.error(err);
+    setAuthMessage("#loginMsg", err.message || "Login failed");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function handleRegister(event) {
+  event.preventDefault();
+  clearAuthMessages();
+  const username = qs("#registerUser")?.value.trim();
+  const password = qs("#registerPass")?.value;
+  const confirmPassword = qs("#registerConfirm")?.value;
+  if (!username || !password) {
+    setAuthMessage("#registerMsg", "Username and password required.");
+    return;
+  }
+  if (password !== confirmPassword) {
+    setAuthMessage("#registerMsg", "Passwords do not match.");
+    return;
+  }
+  const button = qs("#registerBtn");
+  if (button) button.disabled = true;
+
+  try {
+    await api(API.endpoints.register, {
+      method: "POST",
+      body: { username, password },
+    });
+    setAuthMessage("#loginMsg", "Account created. Sign in now.");
+    toggleAuthView("login");
+    qs("#registerForm")?.reset();
+  } catch (err) {
+    console.error(err);
+    setAuthMessage("#registerMsg", err.message || "Registration failed");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function hydrateApp() {
+  await Promise.allSettled([
     loadDashboardStats(),
     loadLogs(),
     loadIncidents(),
     loadDatasheets(),
-    loadSOP()
+    loadSops(),
   ]);
   renderUser();
   renderPlants();
 }
 
-async function loadDashboardStats(){
+async function loadDashboardStats() {
   try {
     const stats = await api(API.endpoints.stats);
-    state.dashboards = stats;
-    state.lastStatsFetch = new Date().toISOString();
+    state.dashboard = stats;
     renderDashboards();
-  } catch (error) {
-    console.error("Failed to load dashboard stats:", error);
+  } catch (err) {
+    console.error("Failed to load stats", err);
   }
 }
 
-function renderDashboards(){
-  const stats = state.dashboards;
-  if(!stats) return;
-  qs("#totals").textContent = stats.totalLogs || 0;
-  qs("#incCount").textContent = stats.openIncidents || 0;
-  qs("#chemStatus").textContent = stats.chemicalStatus || "Stable";
-  qs("#alerts").textContent = stats.activeAlerts || 0;
-  qs("#dashLogs").innerHTML = (stats.recentLogs || []).map(log => `
-    <div>
-      <strong>${log.parameter}</strong> ${log.value}${log.unit} @ ${new Date(log.timestamp).toLocaleString()}
-      <div class="help">${log.notes || ""}</div>
-    </div>
-  `).join("") || '<div class="empty">No logs yet</div>';
-  qs("#dashInc").innerHTML = (stats.openIncidentDetails || []).map(inc => `
-    <div>
-      <div class="row">
-        <strong>${inc.title}</strong>
-        <span class="sev-pill sev-${inc.severity?.toLowerCase()}">${inc.severity}</span>
-      </div>
-      <div class="help">${inc.status} • ${new Date(inc.date || inc.createdAt).toLocaleString()}</div>
-    </div>
-  `).join("") || '<div class="empty">No incidents open</div>';
+const formatMetricValue = (metric) => {
+  if (!metric || metric.value === undefined || metric.value === null) return "—";
+  return metric.unit ? `${metric.value} ${metric.unit}` : metric.value;
+};
+
+const formatDateTime = (value) => {
+  if (!value) return "";
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return value;
+  }
+};
+
+function renderDashboards() {
+  const stats = state.dashboard;
+  if (!stats) return;
+  const setText = (selector, value) => {
+    const el = qs(selector);
+    if (el) el.textContent = value;
+  };
+
+  setText("#kpiFilNTU", formatMetricValue(stats.filteredTurbidity));
+  setText("#kpiFilNote", stats.filteredTurbidity?.status || "target ≤ 0.2 NTU");
+  setText("#kpiCl2", formatMetricValue(stats.freeChlorine));
+  setText("#kpiCT", formatMetricValue(stats.ctValue));
+  setText("#kpiCTFlag", stats.chemicalStatus || "Stable");
+
+  const logsContainer = qs("#dashLogs");
+  if (logsContainer) {
+    logsContainer.innerHTML = (stats.recentLogs || [])
+      .map(
+        (log) => `
+          <div class="dash-row">
+            <div class="row" style="justify-content:space-between">
+              <strong>${escapeHtml(log.parameter || log.notes || "Entry")}</strong>
+              <span class="help">${formatDateTime(log.timestamp)}</span>
+            </div>
+            <div>${escapeHtml(log.value ?? "")} ${escapeHtml(log.unit || "")}</div>
+            <div class="help">${escapeHtml(log.notes || "")}</div>
+          </div>
+        `
+      )
+      .join("") || '<div class="empty">No logs yet</div>';
+  }
+
+  const incContainer = qs("#dashInc");
+  if (incContainer) {
+    incContainer.innerHTML = (stats.openIncidentDetails || [])
+      .map(
+        (inc) => `
+          <div class="dash-row">
+            <div class="row" style="justify-content:space-between">
+              <strong>${escapeHtml(inc.title)}</strong>
+              <span class="sev-pill sev-${(inc.severity || "low").toLowerCase()}">${escapeHtml(
+          inc.severity || ""
+        )}</span>
+            </div>
+            <div class="help">${escapeHtml(inc.status || "Open")} • ${formatDateTime(inc.timestamp)}</div>
+          </div>
+        `
+      )
+      .join("") || '<div class="empty">No incidents open</div>';
+  }
 }
 
-async function loadLogs(){
+async function loadLogs() {
   try {
     const data = await api(API.endpoints.logs);
-    state.logs = data;
+    state.logs = Array.isArray(data) ? data : [];
     renderLogs();
-  } catch (error) {
-    console.error("Failed to load logs:", error);
+  } catch (err) {
+    console.error("Failed to load logs", err);
   }
 }
 
-function renderLogs(){
-  const rows = state.logs.map(log => `
-    <tr>
-      <td>${log.plant || "Central"}</td>
-      <td>${log.operator}</td>
-      <td>${log.parameter}</td>
-      <td>${log.value}</td>
-      <td>${log.unit || ""}</td>
-      <td>${log.status || "OK"}</td>
-      <td>${new Date(log.timestamp).toLocaleString()}</td>
-    </tr>
-  `).join("");
-  qs("#logRows").innerHTML = rows || '<tr><td colspan="7" class="empty">No logs yet</td></tr>';
+function renderLogs() {
+  const container = qs("#logTable");
+  if (!container) return;
+  if (!state.logs.length) {
+    container.innerHTML = '<div class="empty">No logs yet</div>';
+    return;
+  }
+  container.innerHTML = state.logs
+    .map(
+      (log) => `
+        <div class="log-card">
+          <div class="row" style="justify-content:space-between">
+            <strong>${escapeHtml(log.parameter || log.notes || "Entry")}</strong>
+            <span class="help">${formatDateTime(log.timestamp)}</span>
+          </div>
+          <div class="help">${escapeHtml(log.plant || "All Plants")}</div>
+          <div>${escapeHtml(log.value ?? "")} ${escapeHtml(log.unit || "")}</div>
+          <div class="help">${escapeHtml(log.notes || "")}</div>
+          <div class="help">Operator: ${escapeHtml(log.operator || "")}</div>
+        </div>
+      `
+    )
+    .join("");
 }
 
-async function loadIncidents(){
+async function handleAddLog() {
+  const noteInput = qs("#logText");
+  const operatorInput = qs("#operator");
+  if (!noteInput) return;
+  const text = noteInput.value.trim();
+  if (!text) {
+    toast("Enter a log note first.");
+    return;
+  }
+  const button = qs("#btnAddLog");
+  if (button) button.disabled = true;
+
+  try {
+    const payload = {
+      notes: text,
+      text,
+      operator: operatorInput?.value?.trim() || state.user?.username || "Operator",
+      plant: state.selectedPlant,
+      plantType: qs("#plantType")?.value || "",
+    };
+    const created = await api(API.endpoints.logs, { method: "POST", body: payload });
+    state.logs.unshift(created);
+    renderLogs();
+    noteInput.value = "";
+  } catch (err) {
+    toast(err.message || "Failed to add log");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function loadIncidents() {
   try {
     const data = await api(API.endpoints.incidents);
-    state.incidents = data;
+    state.incidents = Array.isArray(data) ? data : [];
     renderIncidents();
-  } catch (error) {
-    console.error("Failed to load incidents:", error);
+  } catch (err) {
+    console.error("Failed to load incidents", err);
   }
 }
 
-function renderIncidents(){
-  const rows = state.incidents.map(i => `
-    <tr>
-      <td>${i.title}</td>
-      <td>${i.severity}</td>
-      <td>${i.status}</td>
-      <td>${new Date(i.date || i.createdAt).toLocaleDateString()}</td>
-      <td>${i.action || ""}</td>
-      <td>${i.owner || ""}</td>
-    </tr>
-  `).join("");
-  qs("#incidentRows").innerHTML = rows || '<tr><td colspan="6" class="empty">No incidents logged</td></tr>';
+function renderIncidents() {
+  const container = qs("#incList");
+  if (!container) return;
+  if (!state.incidents.length) {
+    container.innerHTML = '<div class="empty">No incidents yet</div>';
+    return;
+  }
+  container.innerHTML = state.incidents
+    .map(
+      (inc) => `
+        <div class="incident-card">
+          <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
+            <div>
+              <strong>${escapeHtml(inc.title)}</strong>
+              <div class="help">${escapeHtml(inc.type || "")}</div>
+            </div>
+            <span class="sev-pill sev-${(inc.severity || "low").toLowerCase()}">${escapeHtml(
+        inc.severity || "Low"
+      )}</span>
+          </div>
+          <div class="help">${escapeHtml(inc.status || "Open")} • ${formatDateTime(inc.timestamp)}</div>
+          <p>${escapeHtml(inc.description || "")}</p>
+          <p class="help">Action: ${escapeHtml(inc.action || "")}</p>
+        </div>
+      `
+    )
+    .join("");
 }
 
-async function loadDatasheets(){
+async function handleAddIncident() {
+  const title = qs("#inc_title")?.value.trim();
+  const type = qs("#inc_type")?.value;
+  const severity = qs("#inc_sev")?.value;
+  const description = qs("#inc_desc")?.value.trim();
+  const action = qs("#inc_action")?.value.trim();
+  if (!title) {
+    toast("Add a title before saving the incident.");
+    return;
+  }
+  if (!type) {
+    toast("Select an incident type.");
+    return;
+  }
+  const button = qs("#btnAddIncident");
+  if (button) button.disabled = true;
+
   try {
-    const data = await api(API.endpoints.datasheets);
-    state.datasheets = data;
-    renderDatasheets();
-    renderDatasheetSelector();
-  } catch (error) {
-    console.error("Failed to load datasheets:", error);
+    const payload = {
+      title,
+      type,
+      severity,
+      description,
+      action,
+      plant: state.selectedPlant,
+      operator: state.user?.username || "Operator",
+    };
+    const created = await api(API.endpoints.incidents, { method: "POST", body: payload });
+    state.incidents.unshift(created);
+    renderIncidents();
+    qs("#inc_title").value = "";
+    qs("#inc_desc").value = "";
+    qs("#inc_action").value = "";
+  } catch (err) {
+    toast(err.message || "Failed to add incident");
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
-async function loadSOP(){
+const serializeDatasheetForm = () => {
+  const panel = qs("#panel-datasheet");
+  if (!panel) return {};
+  const values = {};
+  panel.querySelectorAll("input, textarea, select").forEach((input) => {
+    if (!input.id || input.id === "plantPicker" || input.id === "plantType") return;
+    if (input.type === "checkbox") {
+      values[input.id] = input.checked;
+    } else {
+      values[input.id] = input.value;
+    }
+  });
+  return values;
+};
+
+function clearDatasheetForm() {
+  const panel = qs("#panel-datasheet");
+  if (!panel) return;
+  panel.querySelectorAll("input, textarea").forEach((input) => {
+    if (input.type === "checkbox") {
+      input.checked = false;
+    } else {
+      input.value = "";
+    }
+  });
+  panel.querySelectorAll("select").forEach((select) => {
+    if (select.id === "plantPicker" || select.id === "plantType") return;
+    select.selectedIndex = 0;
+  });
+}
+
+const applyDatasheetRecord = (record) => {
+  const panel = qs("#panel-datasheet");
+  if (!panel || !record) return;
+  Object.entries(record.fields || {}).forEach(([key, value]) => {
+    const input = panel.querySelector(`#${key}`);
+    if (!input) return;
+    if (input.type === "checkbox") {
+      input.checked = Boolean(value);
+    } else {
+      input.value = value ?? "";
+    }
+  });
+};
+
+async function handleSaveDatasheet() {
+  const fields = serializeDatasheetForm();
+  if (!Object.keys(fields).length) {
+    toast("Fill out the form before saving.");
+    return;
+  }
+  const button = qs("#btnDSSave");
+  if (button) button.disabled = true;
+
   try {
-    const data = await api(API.endpoints.sop);
-    state.sop = data.content || '';
-    localStorage.setItem('sop', state.sop);
-    renderSOP();
-  } catch (error) {
-    console.error("Failed to load SOP:", error);
+    const payload = {
+      plant: state.selectedPlant,
+      plantType: qs("#plantType")?.value || "",
+      date: fields.ds_date || new Date().toISOString(),
+      fields,
+    };
+    const created = await api(API.endpoints.datasheets, { method: "POST", body: payload });
+    state.datasheetRecords.unshift(created);
+    renderDatasheetRecords();
+    toast("Datasheet saved.");
+  } catch (err) {
+    toast(err.message || "Failed to save datasheet");
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
-function renderSOP(){
-  const output = qs('#sopOutput');
-  const input = qs('#sopInput');
-  if(output) output.textContent = state.sop;
-  if(input) input.value = state.sop;
+async function loadDatasheets() {
+  try {
+    const plantQuery = state.selectedPlant ? `?plant=${encodeURIComponent(state.selectedPlant)}` : "";
+    const records = await api(`${API.endpoints.datasheets}${plantQuery}`);
+    state.datasheetRecords = Array.isArray(records) ? records : [];
+    renderDatasheetRecords();
+  } catch (err) {
+    console.error("Failed to load datasheets", err);
+  }
 }
 
-function renderUser(){
-  const user = state.user;
-  if(!user) return;
-  const label = user.name || user.username || user.email || "Operator";
-  const badge = qs("#userBadge") || qs("#userName");
-  if(badge) badge.textContent = label;
+function renderDatasheetRecords() {
+  const container = qs("#dsRecords");
+  if (!container) return;
+  if (!state.datasheetRecords.length) {
+    container.innerHTML = '<div class="empty">No records saved yet</div>';
+    return;
+  }
+  container.innerHTML = state.datasheetRecords
+    .map(
+      (record) => `
+        <div class="ds-record" data-id="${record.id}">
+          <div class="row" style="justify-content:space-between;gap:12px">
+            <div>
+              <strong>${escapeHtml(record.summary?.location || record.plant || "Record")}</strong>
+              <div class="help">${escapeHtml(record.summary?.date || "")}</div>
+            </div>
+            <button class="secondary" data-role="load-ds" data-id="${record.id}">Load</button>
+          </div>
+          <div class="help">Visited by: ${escapeHtml(record.summary?.visitedBy || "-")}</div>
+        </div>
+      `
+    )
+    .join("");
 }
 
-function renderPlants(){
-  const select = qs('#plantSelect');
-  if(!select) return;
-  const options = state.plants.map(p => `<option value="${p.id}">${p.name}</option>`);
-  select.innerHTML = '<option value="">All Plants</option>' + options.join('');
-  select.value = state.selectedPlant || '';
+function handleDatasheetList(event) {
+  const button = event.target.closest("[data-role='load-ds']");
+  if (!button) return;
+  const record = state.datasheetRecords.find((item) => item.id === button.dataset.id);
+  if (record) {
+    applyDatasheetRecord(record);
+    toast("Record loaded into the form.");
+  }
 }
 
-function setTab(tab){
+async function loadSops() {
+  try {
+    const plantQuery = state.selectedPlant ? `?plant=${encodeURIComponent(state.selectedPlant)}` : "";
+    const data = await api(`${API.endpoints.sop}${plantQuery}`);
+    state.sops = Array.isArray(data) ? data : [];
+    renderSopList();
+  } catch (err) {
+    console.error("Failed to load SOPs", err);
+  }
+}
+
+function renderSopList() {
+  const list = qs("#sopList");
+  if (!list) return;
+  const term = state.sopSearch.toLowerCase();
+  const filtered = state.sops.filter((sop) => {
+    const title = sop.title?.toLowerCase() || "";
+    const steps = Array.isArray(sop.steps) ? sop.steps.join(" ").toLowerCase() : "";
+    return title.includes(term) || steps.includes(term);
+  });
+  if (!filtered.length) {
+    list.innerHTML = '<div class="empty">No SOPs yet</div>';
+    return;
+  }
+  list.innerHTML = filtered
+    .map((sop) => {
+      const stepsMarkup = (sop.steps || [])
+        .map((step) => {
+          if (state.sopChecklist) {
+            return `
+              <label class="sop-step">
+                <input type="checkbox"> <span>${escapeHtml(step)}</span>
+              </label>
+            `;
+          }
+          return `<li>${escapeHtml(step)}</li>`;
+        })
+        .join("");
+      return `
+        <article class="sop-card" data-id="${sop.id}">
+          <div class="row" style="justify-content:space-between;gap:8px">
+            <div>
+              <strong>${escapeHtml(sop.title)}</strong>
+              <div class="help">${escapeHtml(sop.plant || "All plants")}</div>
+            </div>
+            <div class="row" style="gap:6px">
+              <button class="secondary" data-role="edit-sop" data-id="${sop.id}">Edit</button>
+              <button class="secondary" data-role="delete-sop" data-id="${sop.id}" style="color:#b91c1c;border-color:#b91c1c">Delete</button>
+            </div>
+          </div>
+          ${state.sopChecklist ? stepsMarkup : `<ol>${stepsMarkup}</ol>`}
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function populateSopForm(sop) {
+  state.activeSopId = sop?.id || null;
+  const titleInput = qs("#sopTitle");
+  const stepsInput = qs("#sopSteps");
+  if (titleInput) titleInput.value = sop?.title || "";
+  if (stepsInput) stepsInput.value = Array.isArray(sop?.steps) ? sop.steps.join("\n") : "";
+}
+
+async function handleSaveSop() {
+  const titleInput = qs("#sopTitle");
+  const stepsInput = qs("#sopSteps");
+  if (!titleInput || !stepsInput) return;
+  const title = titleInput.value.trim();
+  const steps = stepsInput.value.trim();
+  if (!title) {
+    toast("Add a title before saving the SOP.");
+    return;
+  }
+  if (!steps) {
+    toast("Add at least one step.");
+    return;
+  }
+
+  const payload = {
+    title,
+    steps,
+    plant: state.selectedPlant,
+  };
+  const isEdit = Boolean(state.activeSopId);
+  const path = isEdit ? `${API.endpoints.sop}/${state.activeSopId}` : API.endpoints.sop;
+
+  try {
+    await api(path, {
+      method: isEdit ? "PUT" : "POST",
+      body: payload,
+    });
+    await loadSops();
+    populateSopForm(null);
+    toast("SOP saved.");
+  } catch (err) {
+    toast(err.message || "Failed to save SOP");
+  }
+}
+
+async function handleDeleteSop(id) {
+  if (!id) return;
+  const confirmed = window.confirm("Delete this SOP?");
+  if (!confirmed) return;
+  try {
+    await api(`${API.endpoints.sop}/${id}`, { method: "DELETE" });
+    if (state.activeSopId === id) populateSopForm(null);
+    await loadSops();
+  } catch (err) {
+    toast(err.message || "Failed to delete SOP");
+  }
+}
+
+function handleSopList(event) {
+  const button = event.target.closest("[data-role]");
+  if (!button) return;
+  const id = button.dataset.id;
+  if (button.dataset.role === "edit-sop") {
+    const sop = state.sops.find((entry) => entry.id === id);
+    populateSopForm(sop || null);
+    return;
+  }
+  if (button.dataset.role === "delete-sop") {
+    handleDeleteSop(id);
+  }
+}
+
+function handleClearSop() {
+  populateSopForm(null);
+}
+
+function setTab(tab) {
   state.activeTab = tab;
-  qsa('.panel').forEach(p => p.hidden = p.id !== `panel-${tab}`);
-  qsa('.tab').forEach(btn => btn.setAttribute('aria-selected', btn.dataset.tab === tab));
+  qsa(".panel").forEach((panel) => {
+    panel.hidden = panel.id !== `panel-${tab}`;
+  });
+  qsa(".tab").forEach((button) => {
+    button.setAttribute("aria-selected", button.dataset.tab === tab);
+  });
 }
 
-async function refreshAll(){
-  await hydrateApp();
+function selectPlant(id) {
+  state.selectedPlant = id;
+  localStorage.setItem("selectedPlant", id || "");
+  renderPlants();
+  hydrateApp();
 }
 
-function addRow(tableId, row){
-  const tbody = qs(`#${tableId} tbody`);
-  if (!tbody) return;
-  const tr = document.createElement('tr');
-  tr.innerHTML = row;
-  tbody.appendChild(tr);
+function renderPlants() {
+  state.plants = Array.isArray(state.plants) ? state.plants : [];
+  const picker = qs("#plantPicker");
+  if (picker) {
+    const options = state.plants.map((plant) => `<option value="${plant.id}">${escapeHtml(plant.name)}</option>`);
+    picker.innerHTML = '<option value="">All Plants</option>' + options.join("");
+    picker.value = state.selectedPlant || "";
+  }
+  const plantLabel = qs("#dsPlantLabel");
+  if (plantLabel) {
+    const selected = state.plants.find((plant) => plant.id === state.selectedPlant);
+    plantLabel.textContent = selected?.name || "All";
+  }
+  const typeLabel = qs("#dsTypeLabel");
+  if (typeLabel) typeLabel.textContent = qs("#plantType")?.value || "WTP";
 }
 
-function readRows(tableId){
-  const tbody = qs(`#${tableId} tbody`);
-  if (!tbody) return [];
-  return Array.from(tbody.querySelectorAll('tr')).map(tr =>
-    Array.from(tr.cells).map(cell => cell.textContent.trim())
+function handleAddPlant() {
+  const name = window.prompt("Plant name?");
+  if (!name) return;
+  const id = `plant-${Date.now()}`;
+  state.plants.push({ id, name });
+  persistPlants();
+  selectPlant(id);
+}
+
+function handleDeletePlant() {
+  if (!state.selectedPlant) {
+    toast("Select a plant first.");
+    return;
+  }
+  const confirmed = window.confirm("Delete this plant and its saved filters?");
+  if (!confirmed) return;
+  state.plants = state.plants.filter((plant) => plant.id !== state.selectedPlant);
+  persistPlants();
+  selectPlant("");
+}
+
+function handleResetPlant() {
+  selectPlant("");
+}
+
+function renderUser() {
+  const badge = qs("#userBadge");
+  const label = state.user?.name || state.user?.username || "Operator";
+  if (badge) badge.textContent = label;
+  const operatorInput = qs("#operator");
+  if (operatorInput && !operatorInput.value) operatorInput.value = label;
+}
+
+function startClock() {
+  const el = qs("#clock");
+  if (!el) return;
+  const tick = () => {
+    el.textContent = new Date().toLocaleTimeString();
+  };
+  tick();
+  setInterval(tick, 1000);
+}
+
+function exportTable(headers, rows, filename) {
+  const htmlRows = rows
+    .map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell ?? "")}</td>`).join("")}</tr>`)
+    .join("");
+  const table = `
+    <table>
+      <thead><tr>${headers.map((head) => `<th>${escapeHtml(head)}</th>`).join("")}</tr></thead>
+      <tbody>${htmlRows}</tbody>
+    </table>
+  `;
+  tableDLxls(table, filename);
+}
+
+function exportLogsXLS() {
+  if (!state.logs.length) {
+    toast("No logs to export.");
+    return;
+  }
+  exportTable(
+    ["Plant", "Operator", "Parameter", "Value", "Unit", "Status", "Timestamp"],
+    state.logs.map((log) => [
+      log.plant || "",
+      log.operator || "",
+      log.parameter || log.notes || "",
+      log.value ?? "",
+      log.unit || "",
+      log.status || "",
+      formatDateTime(log.timestamp),
+    ]),
+    "logs.xls"
   );
 }
 
-function makeSheetData(id){
-  const card = qs(`[data-sheet="${id}"]`);
-  if(!card) return null;
-  const name = card.querySelector('h3').textContent.trim();
-  const groups = Array.from(card.querySelectorAll('.sheet-group')).map(group => {
-    const label = group.dataset.label || "";
-    const rows = Array.from(group.querySelectorAll('tbody tr')).map(tr =>
-      Array.from(tr.cells).map(cell => cell.textContent.trim())
-    );
-    return { label, rows };
-  });
-  return { id, name, groups };
-}
-
-function renderDatasheetSelector(){
-  const selector = qs('#datasheetSelect');
-  if(!selector) return;
-  selector.innerHTML = state.datasheets.map(sheet =>
-    `<option value="${sheet._id}">${sheet.name}</option>`
-  ).join('');
-  if(state.datasheets.length && !state.selectedDatasheetId){
-    state.selectedDatasheetId = state.datasheets[0]._id;
+function exportIncidentsXLS() {
+  if (!state.incidents.length) {
+    toast("No incidents to export.");
+    return;
   }
-  selector.value = state.selectedDatasheetId || '';
-  selector.dispatchEvent(new Event('change'));
+  exportTable(
+    ["Title", "Severity", "Status", "Description", "Action", "Timestamp"],
+    state.incidents.map((inc) => [
+      inc.title || "",
+      inc.severity || "",
+      inc.status || "",
+      inc.description || "",
+      inc.action || "",
+      formatDateTime(inc.timestamp),
+    ]),
+    "incidents.xls"
+  );
 }
 
-function renderDatasheets(){
-  const container = qs('#datasheetCards');
-  if(!container) return;
-  container.innerHTML = state.datasheets.map(sheet => {
-    const groups = sheet.sections?.map(section => {
-      const rows = section.rows?.map(row => `
-        <tr>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>
-      `).join('') || '';
-      return `
-        <section class="card sheet-group" data-label="${section.name}">
-          <h4>${section.name}</h4>
-          <div class="body">
-            <table class="table">
-              <tbody>${rows}</tbody>
-            </table>
-          </div>
-        </section>
-      `;
-    }).join('') || '';
-    return `
-      <article class="sheet" data-sheet="${sheet._id}">
-        <header class="row">
-          <div>
-            <h3>${sheet.name}</h3>
-            <p class="help">${sheet.description || ''}</p>
-          </div>
-          <div class="right">
-            <button type="button" onclick="exportDatasheet('${sheet._id}','xls')">XLS</button>
-            <button type="button" onclick="exportDatasheet('${sheet._id}','doc')">DOC</button>
-            <button type="button" onclick="exportDatasheet('${sheet._id}','pdf')">PDF</button>
-          </div>
-        </header>
-        <div class="grid g2">${groups}</div>
-      </article>
-    `;
-  }).join('') || '<div class="empty">No datasheets defined</div>';
+function exportAllXLS() {
+  exportTable(
+    ["Section", "Title", "Details", "Timestamp"],
+    [
+      ...state.logs.map((log) => [
+        "Log",
+        log.parameter || log.notes || "Entry",
+        `${log.value ?? ""} ${log.unit || ""}`,
+        formatDateTime(log.timestamp),
+      ]),
+      ...state.incidents.map((inc) => [
+        "Incident",
+        inc.title,
+        `${inc.severity} - ${inc.status}`,
+        formatDateTime(inc.timestamp),
+      ]),
+    ],
+    "h2ops-export.xls"
+  );
 }
 
-function exportAllDatasheets(format){
-  const table = format === 'pdf' ? createDatasheetTableElement() : makeDatasheetExport();
-  if(format === 'xls') return tableDLxls(table, 'datasheets.xls');
-  if(format === 'doc') return docDL(table, 'datasheets.doc');
-  if(format === 'pdf') return pdfDL(table, 'datasheets.pdf');
+function exportSopsXLS() {
+  if (!state.sops.length) {
+    toast("No SOPs to export.");
+    return;
+  }
+  exportTable(
+    ["Title", "Plant", "Steps"],
+    state.sops.map((sop) => [sop.title, sop.plant || "All", (sop.steps || []).join(" | ")]),
+    "sops.xls"
+  );
 }
 
-function exportDatasheet(id, format){
-  const sheet = state.datasheets.find(ds => ds._id === id);
-  if(!sheet) return;
-  const table = format === 'pdf' ? createSingleDatasheetElement(sheet) : makeSingleDatasheetExport(sheet);
-  if(format === 'xls') return tableDLxls(table, `${sheet.name}.xls`);
-  if(format === 'doc') return docDL(table, `${sheet.name}.doc`);
-  if(format === 'pdf') return pdfDL(table, `${sheet.name}.pdf`);
-}
-
-function makeDatasheetExport(){
-  const table = document.createElement('table');
-  const tbody = document.createElement('tbody');
-  state.datasheets.forEach(sheet => {
-    const headerRow = document.createElement('tr');
-    headerRow.innerHTML = `<th colspan="4">${sheet.name}</th>`;
-    tbody.appendChild(headerRow);
-    sheet.sections?.forEach(section => {
-      const sectionHeader = document.createElement('tr');
-      sectionHeader.innerHTML = `<td colspan="4"><strong>${section.name}</strong></td>`;
-      tbody.appendChild(sectionHeader);
-      section.rows?.forEach(row => {
-        const tr = document.createElement('tr');
-        row.forEach(cell => {
-          const td = document.createElement('td');
-          td.textContent = cell;
-          tr.appendChild(td);
-        });
-        tbody.appendChild(tr);
-      });
-    });
-  });
-  table.appendChild(tbody);
-  return table;
-}
-
-function makeSingleDatasheetExport(sheet){
-  const table = document.createElement('table');
-  const tbody = document.createElement('tbody');
-  const headerRow = document.createElement('tr');
-  headerRow.innerHTML = `<th colspan="4">${sheet.name}</th>`;
-  tbody.appendChild(headerRow);
-  sheet.sections?.forEach(section => {
-    const sectionHeader = document.createElement('tr');
-    sectionHeader.innerHTML = `<td colspan="4"><strong>${section.name}</strong></td>`;
-    tbody.appendChild(sectionHeader);
-    section.rows?.forEach(row => {
-      const tr = document.createElement('tr');
-      row.forEach(cell => {
-        const td = document.createElement('td');
-        td.textContent = cell;
-        tr.appendChild(td);
-      });
-      tbody.appendChild(tr);
-    });
-  });
-  table.appendChild(tbody);
-  return table;
-}
-
-function createDatasheetTableElement(){
-  const container = document.createElement('div');
-  container.className = 'datasheet-export';
-  state.datasheets.forEach(sheet => {
-    const section = document.createElement('section');
-    section.innerHTML = `
-      <h3>${sheet.name}</h3>
-      ${(sheet.sections || []).map(sec => `
-        <div>
-          <strong>${sec.name}</strong>
-          <table class="table">
-            <tbody>
-              ${(sec.rows || []).map(row => `
-                <tr>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-      `).join('')}
-    `;
-    container.appendChild(section);
-  });
-  return container;
-}
-
-function createSingleDatasheetElement(sheet){
-  const container = document.createElement('div');
-  container.className = 'datasheet-export';
-  container.innerHTML = `
-    <h3>${sheet.name}</h3>
-    ${(sheet.sections || []).map(sec => `
-      <div>
-        <strong>${sec.name}</strong>
-        <table class="table">
-          <tbody>
-            ${(sec.rows || []).map(row => `
-              <tr>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-    `).join('')}
-  `;
-  return container;
-}
-
-function tableDLxls(table, filename){
+function tableDLxls(tableMarkup, filename) {
   const html = `
     <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
-    <head><meta charset="utf-8" /><style>table{border-collapse:collapse;font-family:Inter,Arial;font-size:12px}td,th{border:1px solid #d1d5db;padding:4px 6px}</style></head>
-    <body>${table.outerHTML}</body>
+      <head>
+        <meta charset="utf-8" />
+        <style>
+          table{border-collapse:collapse;font-family:Inter,Arial;font-size:12px}
+          td,th{border:1px solid #d1d5db;padding:4px 6px}
+        </style>
+      </head>
+      <body>${tableMarkup}</body>
     </html>
   `;
   const blob = new Blob([html], { type: "application/vnd.ms-excel" });
-  const link = document.createElement('a');
+  const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
   link.download = filename;
   link.click();
   URL.revokeObjectURL(link.href);
 }
 
-function docDL(content, filename){
-  const html = `
-    <html xmlns:w="urn:schemas-microsoft-com:office:word">
-    <head><meta charset="utf-8" /><style>body{font-family:Inter,Arial;line-height:1.4}</style></head>
-    <body>${content.outerHTML || content}</body>
-    </html>
-  `;
-  const blob = new Blob([html], { type: "application/msword" });
-  const link = document.createElement('a');
-  link.href = URL.createObjectURL(blob);
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(link.href);
+function togglePasswordVisibility(event) {
+  event.preventDefault();
+  const input = qs("#loginPass");
+  if (!input) return;
+  const nextType = input.type === "password" ? "text" : "password";
+  input.type = nextType;
+  event.currentTarget.textContent = nextType === "password" ? "Show" : "Hide";
 }
 
-function pdfDL(content, filename){
-  const printWindow = window.open('', '_blank');
-  printWindow.document.write(`
-    <html>
-    <head>
-      <title>${filename}</title>
-      <style>
-        body{font-family:Inter,Arial;margin:20px;line-height:1.4}
-        table{width:100%;border-collapse:collapse;margin-bottom:16px}
-        th,td{border:1px solid #d1d5db;padding:6px 8px}
-        h3{margin-top:24px}
-      </style>
-    </head>
-    <body>${content.outerHTML}</body>
-    </html>
-  `);
-  printWindow.document.close();
-  printWindow.focus();
-  printWindow.print();
-}
-
-function exportDatasheetsXLS(){
-  const table = makeDatasheetExport();
-  tableDLxls(table, 'datasheets.xls');
-}
-
-function exportDatasheetsDOC(){
-  const table = makeDatasheetExport();
-  docDL(table, 'datasheets.doc');
-}
-
-function exportDatasheetsPDF(){
-  const table = createDatasheetTableElement();
-  pdfDL(table, 'datasheets.pdf');
-}
-
-function exportDatasheetXLS(){
-  const id = qs('#datasheetSelect').value;
-  if(!id) return;
-  exportDatasheet(id, 'xls');
-}
-
-function exportDatasheetDOC(){
-  const id = qs('#datasheetSelect').value;
-  if(!id) return;
-  exportDatasheet(id, 'doc');
-}
-
-function exportDatasheetPDF(){
-  const id = qs('#datasheetSelect').value;
-  if(!id) return;
-  exportDatasheet(id, 'pdf');
-}
-
-function setDatasheet(id){
-  state.selectedDatasheetId = id;
-  qsa('.sheet').forEach(sheet => sheet.hidden = sheet.dataset.sheet !== id);
-}
-
-function populateDatasheet(data){
-  const datasheetView = qs('#datasheetView');
-  if(!datasheetView) return;
-  datasheetView.innerHTML = data.sections?.map(section => `
-    <section class="card">
-      <h4>${section.name}</h4>
-      <div class="body">
-        <table class="table">
-          <tbody>
-            ${section.rows?.map(row => `
-              <tr>${row.map(cell => `<td>${cell || ''}</td>`).join('')}</tr>
-            `).join('') || ''}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  `).join('') || '<div class="empty">No data</div>';
-}
-
-function editDatasheet(){
-  const id = qs('#datasheetSelect').value;
-  if(!id) return;
-  const data = state.datasheets.find(ds => ds._id === id);
-  if(!data) return;
-  populateDatasheet(data);
-}
-
-async function saveDatasheet(e){
-  e.preventDefault();
-  const id = qs('#datasheetSelect').value;
-  if(!id) return;
-  const form = e.target;
-  const sections = Array.from(form.querySelectorAll('[data-section]')).map(section => ({
-    name: section.querySelector('input[name="sectionName"]').value,
-    rows: Array.from(section.querySelectorAll('tbody tr')).map(tr =>
-      Array.from(tr.cells).map(cell => cell.querySelector('input')?.value || cell.textContent)
-    )
-  }));
-  try {
-    const updated = await api(`${API.endpoints.datasheets}/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify({ sections })
-    });
-    state.datasheets = state.datasheets.map(ds => ds._id === id ? updated : ds);
-    renderDatasheets();
-  } catch (error) {
-    console.error("Failed to save datasheet:", error);
-  }
-}
-
-async function createDatasheet(e){
-  e.preventDefault();
-  const form = e.target;
-  const data = asFormData(form);
-  const payload = {
-    name: data.name,
-    description: data.description,
-    sections: []
-  };
-  try {
-    const created = await api(API.endpoints.datasheets, {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    });
-    state.datasheets.push(created);
-    renderDatasheets();
-    renderDatasheetSelector();
-    form.reset();
-  } catch (error) {
-    console.error("Failed to create datasheet:", error);
-  }
-}
-
-function addSection(){
-  const container = qs('#datasheetSections');
-  if(!container) return;
-  const index = container.children.length;
-  const section = document.createElement('section');
-  section.className = 'card';
-  section.dataset.section = index;
-  section.innerHTML = `
-    <h4>Section ${index + 1}</h4>
-    <div class="stack">
-      <label class="stack">
-        <span class="help">Section Name</span>
-        <input name="sectionName" required />
-      </label>
-      <button type="button" onclick="addRowToSection(${index})">Add Row</button>
-      <table class="table">
-        <tbody></tbody>
-      </table>
-    </div>
-  `;
-  container.appendChild(section);
-}
-
-function addRowToSection(index){
-  const section = qs(`[data-section="${index}"]`);
-  if(!section) return;
-  const tbody = section.querySelector('tbody');
-  const tr = document.createElement('tr');
-  tr.innerHTML = `
-    <td><input /></td>
-    <td><input /></td>
-    <td><input /></td>
-    <td><input /></td>
-  `;
-  tbody.appendChild(tr);
-}
-
-async function submitLog(e){
-  e.preventDefault();
-  const data = asFormData(e.target);
-  try {
-    const created = await api(API.endpoints.logs, {
-      method: 'POST',
-      body: JSON.stringify(data)
-    });
-    state.logs.unshift(created);
-    renderLogs();
-    e.target.reset();
-  } catch (error) {
-    console.error("Failed to submit log:", error);
-  }
-}
-
-async function submitIncident(e){
-  e.preventDefault();
-  const data = asFormData(e.target);
-  try {
-    const created = await api(API.endpoints.incidents, {
-      method: 'POST',
-      body: JSON.stringify(data)
-    });
-    state.incidents.unshift(created);
-    renderIncidents();
-    e.target.reset();
-  } catch (error) {
-    console.error("Failed to submit incident:", error);
-  }
-}
-
-async function loadUsers(){
-  try {
-    const data = await api(API.endpoints.users);
-    const list = qs('#userList');
-    if(list){
-      list.innerHTML = data.map(u => `<li>${u.name || u.email}</li>`).join('');
-    }
-  } catch (error) {
-    console.error("Failed to load users:", error);
-  }
-}
-
-function addPlant(){
-  const name = prompt('Plant name');
-  if(!name) return;
-  const id = `plant-${Date.now()}`;
-  const plant = { id, name };
-  state.plants.push(plant);
-  localStorage.setItem('plants', JSON.stringify(state.plants));
-  renderPlants();
-}
-
-function removePlant(id){
-  state.plants = state.plants.filter(p => p.id !== id);
-  localStorage.setItem('plants', JSON.stringify(state.plants));
-  renderPlants();
-}
-
-function selectPlant(id){
-  state.selectedPlant = id;
-  localStorage.setItem('selectedPlant', id);
-}
-
-async function saveSOP(e){
-  e.preventDefault();
-  const content = qs('#sopInput').value;
-  try {
-    const saved = await api(API.endpoints.sop, {
-      method: 'PUT',
-      body: JSON.stringify({ content })
-    });
-    state.sop = saved.content;
-    localStorage.setItem('sop', state.sop);
-    renderSOP();
-  } catch (error) {
-    console.error("Failed to save SOP:", error);
-  }
-}
-
-function renderDatasheet(id){
-  const ds = state.datasheets.find(d => d._id === id);
-  if(!ds) return;
-  const view = qs('#datasheetView');
-  if(!view) return;
-  view.innerHTML = ds.sections?.map(section => `
-    <section class="card">
-      <h4>${section.name}</h4>
-      <div class="body">
-        <table class="table">
-          <tbody>
-            ${section.rows?.map(row => `
-              <tr>${row.map(cell => `<td>${cell || ''}</td>`).join('')}</tr>
-            `).join('') || ''}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  `).join('') || '<div class="empty">No data</div>';
-}
-
-async function updateDatasheetView(){
-  const id = qs('#datasheetSelect').value;
-  if(!id) return;
-  try {
-    const data = await api(`${API.endpoints.datasheets}/${id}`);
-    const existingIndex = state.datasheets.findIndex(ds => ds._id === id);
-    if(existingIndex !== -1){
-      state.datasheets[existingIndex] = data;
-    } else {
-      state.datasheets.push(data);
-    }
-    renderDatasheet(id);
-    updateDropdowns();
-  } catch (error) {
-    console.error("Failed to update datasheet view:", error);
-  }
-}
-
-function updateDropdowns(){
-  const selects = qsa('select[name="datasheet"]');
-  selects.forEach(select => {
-    const currentValue = select.value;
-    select.innerHTML = state.datasheets.map(ds => `<option value="${ds._id}">${ds.name}</option>`).join('');
-    select.value = currentValue || state.datasheets[0]?._id || '';
-  });
-}
-
-function updateDatasheetSelectOptions(){
-  const datasheetSelect = qs('#datasheetSelect');
-  if(datasheetSelect){
-    const options = state.datasheets.map(ds => `<option value="${ds._id}">${ds.name}</option>`).join('');
-    datasheetSelect.innerHTML = options;
-    datasheetSelect.value = state.selectedDatasheetId || state.datasheets[0]?._id || '';
-  }
-}
-
-function handleDatasheetChange(){
-  const id = qs('#datasheetSelect').value;
-  if(!id) return;
-  state.selectedDatasheetId = id;
-  renderDatasheet(id);
-}
-
-function setupEventListeners(){
-  qs('#loginForm')?.addEventListener('submit', handleLogin);
-  qs('#registerForm')?.addEventListener('submit', handleRegister);
-  qs('#btnLogout')?.addEventListener('click', logout);
-  qs('#togglePw')?.addEventListener('click', e => {
-    e.preventDefault();
-    const input = qs('#loginPass');
-    if(!input) return;
-    const nextType = input.type === 'password' ? 'text' : 'password';
-    input.type = nextType;
-    e.currentTarget.textContent = nextType === 'password' ? 'Show' : 'Hide';
-  });
-  qs('#goRegister')?.addEventListener('click', () => {
+function setupEventListeners() {
+  qs("#loginForm")?.addEventListener("submit", handleLogin);
+  qs("#registerForm")?.addEventListener("submit", handleRegister);
+  qs("#btnLogout")?.addEventListener("click", logout);
+  qs("#togglePw")?.addEventListener("click", togglePasswordVisibility);
+  qs("#goRegister")?.addEventListener("click", () => {
     clearAuthMessages();
-    qs('#registerForm')?.reset();
-    toggleAuthView('register');
+    toggleAuthView("register");
   });
-  qs('#backToLogin')?.addEventListener('click', () => {
+  qs("#backToLogin")?.addEventListener("click", () => {
     clearAuthMessages();
-    toggleAuthView('login');
+    toggleAuthView("login");
   });
-  qsa('.tab').forEach(btn => btn.addEventListener('click', () => setTab(btn.dataset.tab)));
-  qs('#refreshBtn')?.addEventListener('click', refreshAll);
-  qs('#datasheetSelect')?.addEventListener('change', handleDatasheetChange);
-  qs('#datasheetForm')?.addEventListener('submit', saveDatasheet);
-  qs('#newSheetForm')?.addEventListener('submit', createDatasheet);
-  qs('#logForm')?.addEventListener('submit', submitLog);
-  qs('#incidentForm')?.addEventListener('submit', submitIncident);
-  qs('#sopForm')?.addEventListener('submit', saveSOP);
-  qs('#exportXLS')?.addEventListener('click', exportDatasheetsXLS);
-  qs('#exportDOC')?.addEventListener('click', exportDatasheetsDOC);
-  qs('#exportPDF')?.addEventListener('click', exportDatasheetsPDF);
-  qs('#exportSheetXLS')?.addEventListener('click', exportDatasheetXLS);
-  qs('#exportSheetDOC')?.addEventListener('click', exportDatasheetDOC);
-  qs('#exportSheetPDF')?.addEventListener('click', exportDatasheetPDF);
-  qs('#datasheetSelect')?.addEventListener('change', updateDatasheetView);
-  qs('#plantSelect')?.addEventListener('change', e => selectPlant(e.target.value));
+  qsa(".tab").forEach((button) => button.addEventListener("click", () => setTab(button.dataset.tab)));
+  qs("#btnAddLog")?.addEventListener("click", handleAddLog);
+  qs("#btnAddIncident")?.addEventListener("click", handleAddIncident);
+  qs("#btnDSSave")?.addEventListener("click", handleSaveDatasheet);
+  qs("#btnDSNew")?.addEventListener("click", () => {
+    clearDatasheetForm();
+    toast("Datasheet form cleared.");
+  });
+  qs("#dsRecords")?.addEventListener("click", handleDatasheetList);
+  qs("#btnAddPlant")?.addEventListener("click", handleAddPlant);
+  qs("#btnDeletePlant")?.addEventListener("click", handleDeletePlant);
+  qs("#btnResetPlant")?.addEventListener("click", handleResetPlant);
+  qs("#plantPicker")?.addEventListener("change", (event) => selectPlant(event.target.value));
+  qs("#plantType")?.addEventListener("change", renderPlants);
+  qs("#btnSaveSOP")?.addEventListener("click", handleSaveSop);
+  qs("#btnClearSOP")?.addEventListener("click", handleClearSop);
+  qs("#btnExportSOPXLS")?.addEventListener("click", exportSopsXLS);
+  qs("#btnExportLogsXLS")?.addEventListener("click", exportLogsXLS);
+  qs("#btnExportIncXLS")?.addEventListener("click", exportIncidentsXLS);
+  qs("#btnExportAllXLS")?.addEventListener("click", exportAllXLS);
+  qs("#sopList")?.addEventListener("click", handleSopList);
+  qs("#sopSearch")?.addEventListener("input", (event) => {
+    state.sopSearch = event.target.value;
+    renderSopList();
+  });
+  qs("#sopChecklistMode")?.addEventListener("change", (event) => {
+    state.sopChecklist = event.target.checked;
+    renderSopList();
+  });
 }
 
-async function init(){
+async function init() {
   setupEventListeners();
-  if(state.accessToken){
-    try{
+  startClock();
+  if (state.accessToken) {
+    showAppShell();
+    try {
       await hydrateApp();
-      showAppShell();
-    }catch(err){
-      console.error(err);
+    } catch (err) {
+      console.error("Failed to start app", err);
+      toast("Session expired, please sign in again.");
       logout();
     }
   } else {
-    clearAuthMessages();
     showLoginShell("login");
   }
 }
 
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener("DOMContentLoaded", init);

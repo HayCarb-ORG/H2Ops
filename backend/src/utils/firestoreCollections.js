@@ -5,6 +5,8 @@ const FieldValue = admin.firestore.FieldValue;
 const usersCollection = db.collection("users");
 const logsCollection = db.collection("logs");
 const incidentsCollection = db.collection("incidents");
+const datasheetsCollection = db.collection("datasheets");
+const sopsCollection = db.collection("sops");
 
 const toMillis = (timestamp) => {
   if (!timestamp) return Date.now();
@@ -18,5 +20,7 @@ module.exports = {
   usersCollection,
   logsCollection,
   incidentsCollection,
+  datasheetsCollection,
+  sopsCollection,
   toMillis,
 };

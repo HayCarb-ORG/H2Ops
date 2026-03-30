@@ -26,6 +26,30 @@ const formatUser = (doc) => {
   };
 };
 
+const seedUsername = process.env.SEED_ADMIN_USERNAME?.trim();
+const seedPassword = process.env.SEED_ADMIN_PASSWORD;
+
+const seedDefaultUser = async () => {
+  if (!seedUsername || !seedPassword) return;
+  try {
+    const existing = await findUserByUsername(seedUsername);
+    if (existing) return;
+
+    const hash = await bcrypt.hash(seedPassword, 10);
+    await usersCollection.add({
+      username: seedUsername,
+      password: hash,
+      createdAt: FieldValue.serverTimestamp(),
+      seeded: true,
+    });
+    console.log(`[auth] Seeded default user "${seedUsername}" from SEED_ADMIN credentials`);
+  } catch (err) {
+    console.error("Seed default user error:", err.message || err);
+  }
+};
+
+seedDefaultUser();
+
 exports.register = async (req, res) => {
   try {
     const username = req.body.username?.trim();
